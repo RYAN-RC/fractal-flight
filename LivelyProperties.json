@@ -1,0 +1,39 @@
+{
+  "speed": {
+    "type": "slider",
+    "value": 1,
+    "text": "Flight speed",
+    "min": 0.25,
+    "max": 3,
+    "step": 0.05
+  },
+  "quality": {
+    "type": "dropdown",
+    "value": 1,
+    "text": "Quality",
+    "items": [
+      "Low (light on the GPU)",
+      "Medium",
+      "High"
+    ]
+  },
+  "fps": {
+    "type": "dropdown",
+    "value": 1,
+    "text": "Frame rate",
+    "items": [
+      "30 fps",
+      "60 fps"
+    ]
+  },
+  "bulb": {
+    "type": "checkbox",
+    "value": true,
+    "text": "Visit 3D fractal objects between planets"
+  },
+  "labels": {
+    "type": "checkbox",
+    "value": true,
+    "text": "Show each place's name"
+  }
+}

@@ -1,0 +1,1743 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fractal Flight</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #label {
+    position: fixed; left: 56px; bottom: 92px; color: #fff; pointer-events: none;
+    font: 400 13px/1.5 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: .14em; text-transform: uppercase;
+    text-shadow: 0 1px 14px rgba(0, 0, 0, .7), 0 0 2px rgba(0, 0, 0, .5);
+    opacity: 0; transition: opacity 2.5s ease;
+  }
+  #label b { display: block; font-weight: 600; font-size: 26px; letter-spacing: .03em; text-transform: none; margin-bottom: 2px; }
+  #label.show { opacity: .88; }
+  #err { display: none; position: fixed; left: 24px; top: 24px; right: 24px; color: #fbb; font: 13px/1.4 Consolas, monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="label"><b id="labelName"></b><span id="labelSub"></span></div>
+<div id="err"></div>
+<div id="info" hidden></div>
+<script src="finder.js"></script>
+<script src="discovered.js"></script>
+<script>
+(function () {
+'use strict';
+
+const Q = new URLSearchParams(location.search);
+const STILL = Q.has('still');
+const canvas = document.getElementById('c');
+const errBox = document.getElementById('err');
+function fail(msg) { errBox.textContent = msg; errBox.style.display = 'block'; console.error(msg); }
+function num(v, d) { const n = parseFloat(v); return isFinite(n) ? n : d; }
+
+// ---------------------------------------------------------------- settings
+const settings = {
+  speed: num(Q.get('speed'), 1),
+  quality: Math.max(0, Math.min(2, num(Q.get('quality'), 2) | 0)),
+  fps: num(Q.get('fps'), 60),
+  bulb: Q.get('bulb') !== '0',
+  labels: Q.get('labels') !== '0',
+};
+// budget = share of each frame the GPU may spend on the wallpaper.
+// At 60 fps on two screens, Medium lands near 40% of the GPU in total.
+const QUALITY = [
+  { maxScale: 0.5, iterMul: 0.6, shadows: 0, budget: 0.12 },
+  { maxScale: 0.75, iterMul: 0.85, shadows: 1, budget: 0.2 },
+  { maxScale: 1.0, iterMul: 1.0, shadows: 1, budget: 0.35 },
+];
+const FORCE_KIND = Q.get('scene');          // 'mandel' or 'bulb' to test one kind
+const FORCE_REGION = Q.has('region') ? num(Q.get('region'), 0) | 0 : null;
+const FORCE_PAL = Q.has('pal') ? num(Q.get('pal'), 0) | 0 : null;
+let renderScale = STILL ? num(Q.get('scale'), 1) : 0.7;
+
+// Lively Wallpaper calls this for each entry in LivelyProperties.json.
+window.livelyPropertyListener = function (name, val) {
+  switch (name) {
+    case 'speed': settings.speed = Math.max(0.1, +val || 1); break;
+    case 'quality':
+      settings.quality = Math.max(0, Math.min(2, +val | 0));
+      renderScale = Math.min(renderScale, QUALITY[settings.quality].maxScale);
+      break;
+    case 'fps': settings.fps = (+val === 0) ? 30 : 60; break;
+    case 'bulb': settings.bulb = !!val; break;
+    case 'labels': settings.labels = !!val; if (!val) hideLabel(); break;
+  }
+};
+
+// ---------------------------------------------------------------- palettes
+// Colour stops wrap around (first == last). Sky colours light each scene.
+const PALETTES = [
+  { name: 'Nebula', stops: ['#0b0033', '#3a0ca3', '#7209b7', '#f72585', '#ff8500', '#ffd60a', '#4cc9f0', '#0b0033'],
+    zenith: '#05001a', horizon: '#c43a8c', sun: '#ffd29a', glow: '#ff5ec4' },
+  { name: 'Electric', stops: ['#020024', '#1e3cff', '#00d4ff', '#00ffa3', '#fff200', '#ff6a00', '#ff006e', '#8000ff', '#020024'],
+    zenith: '#000416', horizon: '#2a5cff', sun: '#cfeeff', glow: '#00e5ff' },
+  { name: 'Sunset', stops: ['#140021', '#5a0a8c', '#c2185b', '#ff5722', '#ffc107', '#fff4d6', '#ff9800', '#b71c1c', '#140021'],
+    zenith: '#10001c', horizon: '#ff6a3c', sun: '#ffe2a8', glow: '#ffae42' },
+  { name: 'Aurora', stops: ['#000814', '#003566', '#00b4d8', '#48ff8a', '#d6ff4a', '#00f5d4', '#9b5de5', '#f15bb5', '#000814'],
+    zenith: '#00040f', horizon: '#169c86', sun: '#d8fff0', glow: '#5effc1' },
+  { name: 'Candy', stops: ['#2b0040', '#ff0080', '#ff8c00', '#ffe600', '#00e676', '#00b0ff', '#7c4dff', '#2b0040'],
+    zenith: '#0b0220', horizon: '#e044c4', sun: '#fff1c2', glow: '#ff6bd6' },
+  { name: 'Lava and Ice', stops: ['#0b0420', '#ff2a6d', '#ff9a00', '#fff3b0', '#05d9e8', '#005678', '#0b0420'],
+    zenith: '#030014', horizon: '#c8326a', sun: '#ffe9c4', glow: '#05d9e8' },
+  { name: 'Classic', stops: ['#000764', '#206bcb', '#edffff', '#ffaa00', '#3a0a00', '#000764'],
+    zenith: '#000214', horizon: '#3570d0', sun: '#fff3d0', glow: '#9fd9ff' },
+  { name: 'Emerald', stops: ['#001a14', '#00704a', '#00e5a0', '#e8ff9c', '#ffd000', '#ff7b00', '#5c1a00', '#001a14'],
+    zenith: '#000d0a', horizon: '#1f9e6e', sun: '#fff6cc', glow: '#7dffb0' },
+];
+
+const s2l = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+const l2s = c => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
+function hexLin(h) { const n = parseInt(h.slice(1), 16); return [s2l((n >> 16 & 255) / 255), s2l((n >> 8 & 255) / 255), s2l((n & 255) / 255)]; }
+function linToOklab([r, g, b]) {
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+          1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+          0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function oklabToLin([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+          -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+          -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s];
+}
+PALETTES.forEach(p => {
+  p.zenithL = hexLin(p.zenith);
+  p.horizonL = hexLin(p.horizon).map(v => v * 0.8);
+  p.sunL = hexLin(p.sun).map(v => v * 2.2);
+  p.glowL = hexLin(p.glow);
+});
+
+// ---------------------------------------------------------------- vectors
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scl = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm = a => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const PLANET_R = 1.3;     // radius of a Mandelbrot planet, in c units
+const DEG = Math.PI / 180;
+
+// Camera basis looking along f with world up wUp, then pitched up by lift and rolled.
+function basis(f, wUp, lift, roll) {
+  f = norm(f);
+  let right = norm(cross(f, wUp));
+  let up = cross(right, f);
+  if (lift) { f = norm(add(scl(f, Math.cos(lift)), scl(up, Math.sin(lift)))); up = cross(right, f); }
+  if (roll) { right = add(scl(right, Math.cos(roll)), scl(up, Math.sin(roll))); up = cross(right, f); }
+  return { f, right, up };
+}
+
+// ---------------------------------------------------------------- WebGL
+const gl = canvas.getContext('webgl2', {
+  antialias: false, alpha: false, depth: false, stencil: false,
+  preserveDrawingBuffer: STILL || Q.has('keep'), powerPreference: 'high-performance',
+});
+if (!gl) { fail('This wallpaper needs WebGL 2.'); return; }
+canvas.addEventListener('webglcontextlost', e => { e.preventDefault(); setTimeout(() => location.reload(), 2000); });
+
+const VS = `#version 300 es
+out vec2 vUv;
+void main() {
+  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  vUv = p * 0.5 + 0.5;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+// Shared by both scene shaders, which declare uZenith, uHorizon, uSunCol, uGlow,
+// uTime, uPal and uPalRow first. The space backdrop works in "sky coordinates"
+// (z = up); each shader converts its own directions before calling skyCol.
+const COMMON = `
+uniform vec3 uSunSky;        // sun direction, sky coordinates
+uniform float uPxAng;        // radians per pixel, so stars stay one or two pixels wide
+uniform float uAtmo;         // 1 = standing on a world (horizon glow), 0 = open space
+uniform vec3 uSkySeed;
+uniform vec3 uBandN;         // normal of the Milky Way band's great circle
+uniform vec4 uGal[6];        // galaxies: xyz = direction, w = angular radius
+uniform vec4 uGalB[6];       //   x = rotation, y = cos(inclination), z = arm count, w = tint
+uniform vec4 uPlanet[2];     // gas giants: xyz = direction, w = angular radius (0 = none)
+uniform vec3 uPlanetAxis[2];
+uniform vec4 uPlanetB[2];    //   x = band frequency, y = palette offset, z = rings (0/1), w = storm angle
+uniform vec4 uMoon[2];       // moons: xyz = direction, w = angular radius (0 = none)
+
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+vec3 hash33(vec3 p) {
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yxz + 33.33);
+  return fract((p.xxy + p.yxx) * p.zyx);
+}
+float vnoise(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash13(i), hash13(i + vec3(1.0, 0.0, 0.0)), f.x),
+                 mix(hash13(i + vec3(0.0, 1.0, 0.0)), hash13(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+             mix(mix(hash13(i + vec3(0.0, 0.0, 1.0)), hash13(i + vec3(1.0, 0.0, 1.0)), f.x),
+                 mix(hash13(i + vec3(0.0, 1.0, 1.0)), hash13(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}
+float fbm3(vec3 p) {
+  return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03 + 17.1) + 0.125 * vnoise(p * 4.11 + 31.7);
+}
+float fbm5(vec3 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++) { s += a * vnoise(p); p = p * 2.03 + 17.1; a *= 0.5; }
+  return s;
+}
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+vec3 palC(float x) { return texture(uPal, vec2(x, uPalRow)).rgb; }
+
+vec3 starTint(float t) {
+  if (t < 0.3) return mix(vec3(0.62, 0.72, 1.0), vec3(0.95, 0.96, 1.0), t / 0.3);
+  if (t < 0.7) return mix(vec3(0.95, 0.96, 1.0), vec3(1.0, 0.9, 0.74), (t - 0.3) / 0.4);
+  return mix(vec3(1.0, 0.9, 0.74), vec3(1.0, 0.66, 0.46), (t - 0.7) / 0.3);
+}
+
+// One layer of stars: a grid on each cube face, at most one star per cell,
+// checking the 3x3 neighbouring cells so no star is ever cut off.
+vec3 starLayer(vec3 d, float cells, float keep, float seed, float gain) {
+  vec3 a = abs(d);
+  vec2 uv;
+  float face;
+  if (a.x >= a.y && a.x >= a.z) { uv = d.yz / a.x; face = d.x > 0.0 ? 0.0 : 1.0; }
+  else if (a.y >= a.z) { uv = d.xz / a.y; face = d.y > 0.0 ? 2.0 : 3.0; }
+  else { uv = d.xy / a.z; face = d.z > 0.0 ? 4.0 : 5.0; }
+  vec2 g = (uv * 0.5 + 0.5) * cells;
+  vec2 gi = floor(g);
+  vec3 col = vec3(0.0);
+  for (int j = -1; j <= 1; j++) {
+    for (int i = -1; i <= 1; i++) {
+      vec2 c = gi + vec2(float(i), float(j));
+      vec3 h = hash33(vec3(c, face * 37.0 + seed) + uSkySeed);
+      if (h.z > keep) continue;
+      vec2 s = (c + 0.2 + 0.6 * h.xy) / cells * 2.0 - 1.0;
+      vec3 sd;
+      if (face < 1.5) sd = vec3(face < 0.5 ? 1.0 : -1.0, s.x, s.y);
+      else if (face < 3.5) sd = vec3(s.x, face < 2.5 ? 1.0 : -1.0, s.y);
+      else sd = vec3(s.x, s.y, face < 4.5 ? 1.0 : -1.0);
+      sd = normalize(sd);
+      float hb = hash13(vec3(c, face + seed * 3.1) + uSkySeed.zxy);
+      float br = pow(hb, 8.0) * 2.2 + 0.012;
+      float sz = max(uPxAng * 1.25, 0.00016) * (0.85 + 0.5 * sqrt(br));   // over a pixel wide: no strobing
+      vec3 dd = d - sd;
+      col += starTint(fract(hb * 13.7)) * br * exp(-dot(dd, dd) / (sz * sz));
+    }
+  }
+  return col * gain;
+}
+
+// Coloured gas clouds (domain-warped noise) with dark dust lanes.
+void nebula(vec3 d, float band, out vec3 col, out float dust) {
+  vec3 p = d * 2.0 + uSkySeed;
+  vec3 q = vec3(fbm3(p), fbm3(p + 5.2), fbm3(p + 9.7));
+  float n = fbm5(p * 1.5 + 2.2 * q);
+  float patchy = smoothstep(0.40, 0.72, fbm3(d * 1.1 + uSkySeed.zxy));
+  float dens = pow(clamp((n - 0.36) * 2.2, 0.0, 1.0), 1.7) * (patchy * 0.9 + band * 0.6);
+  col = mix(palC(q.x * 0.9 + 0.1), palC(q.z * 0.9 + 0.55), smoothstep(0.35, 0.65, q.y)) * dens * 0.5;
+  col += vec3(0.85, 0.82, 1.0) * band * (0.04 + 0.12 * n);           // unresolved stars in the band
+  dust = smoothstep(0.50, 0.70, fbm3(p * 3.0 + 11.0)) * clamp(band * 1.3 + patchy * 0.5, 0.0, 1.0);
+  col *= 1.0 - 0.8 * dust;
+}
+
+// A spiral galaxy seen at some inclination.
+vec3 galaxy(vec3 d, vec4 g, vec4 b) {
+  float ca = dot(d, g.xyz);
+  if (ca < cos(g.w * 1.7)) return vec3(0.0);
+  vec3 U = normalize(cross(g.xyz, abs(g.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+  vec3 V = cross(g.xyz, U);
+  vec2 q = vec2(dot(d, U), dot(d, V)) / g.w;
+  float cr = cos(b.x), sr = sin(b.x);
+  q = vec2(cr * q.x - sr * q.y, sr * q.x + cr * q.y);
+  q.y /= b.y;
+  float r = length(q);
+  float th = atan(q.y, q.x);
+  float lr = log(max(r, 0.02));
+  float arm = 0.5 + 0.5 * cos(b.z * (th - lr * 2.4));
+  float armMask = arm * arm * arm;
+  float disk = exp(-r * 3.4);
+  float bulge = exp(-r * r * 45.0);
+  float detail = clamp(g.w / (uPxAng * 60.0), 0.0, 1.0);         // no fine clumps on tiny galaxies
+  float clumps = mix(0.6, vnoise(vec3(q * 12.0, b.w * 10.0)), detail);
+  vec3 armCol = mix(vec3(0.55, 0.7, 1.0), palC(b.w), 0.3);
+  vec3 col = vec3(1.0, 0.86, 0.62) * bulge * 2.2
+           + armCol * disk * (0.18 + 1.3 * armMask) * (0.55 + 0.7 * clumps)
+           + vec3(1.0, 0.4, 0.62) * disk * armMask * pow(clumps, 5.0) * 1.6 * detail;
+  float lane = pow(0.5 + 0.5 * cos(b.z * (th - lr * 2.4) - 0.8), 8.0) * disk;
+  col *= 1.0 - 0.55 * lane;
+  return col * smoothstep(1.7, 1.0, r) * 0.75;
+}
+
+// Gas giant with bands, a storm, atmosphere glow and (maybe) rings.
+void addPlanet(vec3 d, inout vec3 c, vec4 P, vec3 axis, vec4 B) {
+  if (P.w <= 0.0) return;
+  vec3 pc = P.xyz;
+  float pr = P.w;
+  float cosd = dot(d, pc);
+  if (cosd < cos(pr * 3.0)) return;
+  float rho = sin(pr);
+  float ang = acos(clamp(cosd, -1.0, 1.0));
+  float disc = cosd * cosd - (1.0 - rho * rho);
+  float tP = cosd - sqrt(max(disc, 0.0));
+  float cover = clamp((pr - ang) / uPxAng + 0.5, 0.0, 1.0);
+  vec3 sun = uSunSky;
+  vec3 atm = mix(uGlow, vec3(0.6, 0.8, 1.0), 0.45);
+  vec3 across = normalize(d - pc * cosd + 1e-6);
+  float litSide = 0.25 + 0.75 * max(dot(across, sun), 0.0);
+  c += atm * exp(-max(ang - pr, 0.0) / (pr * 0.06)) * 0.3 * litSide * (1.0 - cover);
+
+  vec4 ring = vec4(0.0);
+  float tR = 1e9;
+  if (B.z > 0.5) {
+    float dn = dot(d, axis);
+    float t = abs(dn) > 1e-4 ? dot(pc, axis) / dn : -1.0;
+    if (t > 0.0) {
+      vec3 H = d * t;
+      float rr = length(H - pc) / rho;
+      if (rr > 1.3 && rr < 2.5) {
+        tR = t;
+        float bands = 0.55 + 0.45 * sin(rr * 48.0 + 3.0 * vnoise(vec3(rr * 26.0, 1.0, 2.0)));
+        float gaps = smoothstep(0.0, 0.035, abs(rr - 1.96)) * smoothstep(0.0, 0.02, abs(rr - 1.62));
+        float edge = smoothstep(1.3, 1.38, rr) * smoothstep(2.5, 2.36, rr);
+        vec3 oc = H - pc;
+        float bb = dot(oc, sun);
+        float shadow = (bb < 0.0 && bb * bb - (dot(oc, oc) - rho * rho) > 0.0) ? 0.12 : 1.0;
+        vec3 rc = mix(palC(B.y + 0.5), vec3(0.95, 0.9, 0.82), 0.55) * (0.3 + 0.9 * abs(dot(axis, sun))) * shadow;
+        ring = vec4(rc, bands * gaps * edge * 0.85);
+      }
+    }
+  }
+  bool ringFront = ring.a > 0.0 && (cover <= 0.0 || tR < tP);
+  if (ring.a > 0.0 && !ringFront) c = mix(c, ring.rgb, ring.a);
+  if (cover > 0.0) {
+    vec3 N = normalize(d * tP - pc);
+    float lat = dot(N, axis);
+    vec3 w = N * 3.0 + uSkySeed;
+    float turb = fbm5(w + 1.6 * vec3(fbm3(w * 2.0), fbm3(w * 2.0 + 4.0), 0.0));
+    float bc = lat * B.x + turb * 0.7;
+    vec3 base = palC(B.y + bc * 0.16);
+    base = mix(base, vec3(dot(base, vec3(0.3, 0.5, 0.2))), 0.3);
+    base *= 0.78 + 0.22 * sin(bc * 6.2832);
+    vec3 sdir = normalize(cos(B.w) * normalize(cross(axis, vec3(0.3, 0.7, 0.2))) + 0.3 * axis);
+    float storm = exp(-dot(N - sdir, N - sdir) * 60.0);
+    base = mix(base, palC(B.y + 0.33) * 1.15, storm * 0.85);
+    float mu = max(dot(N, -d), 0.0);
+    float lam = dot(N, sun);
+    vec3 pcol = base * (smoothstep(-0.12, 0.3, lam) * 1.1 * pow(mu, 0.35) + 0.012);
+    pcol += atm * pow(1.0 - mu, 3.0) * smoothstep(-0.25, 0.4, lam) * 0.8;
+    c = mix(c, pcol, cover);
+  }
+  if (ringFront) c = mix(c, ring.rgb, ring.a);
+}
+
+void addMoon(vec3 d, inout vec3 c, vec4 M) {
+  if (M.w <= 0.0) return;
+  float cosd = dot(d, M.xyz);
+  float pr = M.w;
+  if (cosd < cos(pr * 1.5)) return;
+  float rho = sin(pr);
+  float ang = acos(clamp(cosd, -1.0, 1.0));
+  float cover = clamp((pr - ang) / uPxAng + 0.5, 0.0, 1.0);
+  if (cover <= 0.0) return;
+  float tM = cosd - sqrt(max(cosd * cosd - (1.0 - rho * rho), 0.0));
+  vec3 N = normalize(d * tM - M.xyz);
+  float craters = fbm3(N * 7.0 + uSkySeed.yzx);
+  vec3 base = mix(vec3(0.55, 0.53, 0.5), palC(fract(M.x * 7.3) + 0.7), 0.2) * (0.6 + 0.6 * craters);
+  vec3 col = base * (smoothstep(-0.05, 0.25, dot(N, uSunSky)) * 1.1 + 0.01);
+  c = mix(c, col, cover);
+}
+
+// The backdrop seen from the ground (or from open space when uAtmo = 0).
+// d is in sky coordinates (z = up).
+vec3 skyCol(vec3 d) {
+  float up = d.z;
+  float a = 1.0 - clamp(up * 2.2, 0.0, 1.0);
+  float band = exp(-pow(dot(d, uBandN) / 0.22, 2.0));
+  vec3 c = uZenith * 0.35;
+  vec3 neb;
+  float dust;
+  nebula(d, band, neb, dust);
+  c += neb;
+  vec3 stars = starLayer(d, 60.0, 0.14, 1.0, 1.0)
+             + starLayer(d, 170.0, 0.10, 2.0, 0.35)
+             + starLayer(d, 420.0, 0.02 + 0.35 * band, 3.0, 0.05 + 0.12 * band);
+  c += stars * (1.0 - 0.85 * dust);
+  for (int i = 0; i < 6; i++) c += galaxy(d, uGal[i], uGalB[i]);
+  for (int i = 0; i < 2; i++) addPlanet(d, c, uPlanet[i], uPlanetAxis[i], uPlanetB[i]);
+  for (int i = 0; i < 2; i++) addMoon(d, c, uMoon[i]);
+  // Air near the horizon washes space out and glows.
+  c *= mix(1.0, smoothstep(-0.01, 0.12, up), uAtmo);
+  c += uHorizon * (0.06 * a * a + 0.35 * pow(a, 10.0)) * uAtmo;
+  c = mix(c, uZenith * 0.5, smoothstep(0.0, -0.5, up) * uAtmo);
+  float s = max(dot(d, uSunSky), 0.0);
+  c += uSunCol * (pow(s, 1500.0) * 8.0 + pow(s, 80.0) * 0.3 + pow(s, 8.0) * 0.05);
+  return c;
+}
+// Cheap version for fog: just the air glow and the sun.
+vec3 skyFog(vec3 d) {
+  float a = 1.0 - clamp(d.z * 2.2, 0.0, 1.0);
+  vec3 c = uZenith * 0.35 + uHorizon * (0.06 * a * a + 0.35 * pow(a, 10.0));
+  float s = max(dot(d, uSunSky), 0.0);
+  return c + uSunCol * (pow(s, 80.0) * 0.3 + pow(s, 8.0) * 0.05);
+}
+`;
+
+// Mandelbrot set as a landscape seen in perspective. The ground plane is the
+// complex plane (x = real, y = imaginary, z = up). Deep zoom uses perturbation:
+// a reference orbit at the target (computed in doubles on the CPU) plus per-pixel
+// float deltas, with rebasing so it never glitches.
+// Pass 1 colours each pixel's ground point on the flat plane and stores, in alpha,
+// how far up the screen that point's terrain column reaches. Height comes from
+// the distance to the set: open areas are plateaus, the filaments are canyons
+// and the set itself is a lake at the bottom. Pass 2 (RELIEF_FS) raises the columns.
+const MANDEL_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform vec2 uRes;
+uniform vec3 uCam;
+uniform vec3 uFwd;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform float uTanHalf;
+uniform float uAlt;
+uniform sampler2D uRef;
+uniform int uRefLen;
+uniform int uMaxIter;
+uniform sampler2D uPal;
+uniform float uPalRow;
+uniform float uPalDensity;
+uniform float uPalShift;
+uniform float uPalExp;
+uniform vec3 uSun;
+uniform vec3 uZenith;
+uniform vec3 uHorizon;
+uniform vec3 uSunCol;
+uniform vec3 uGlow;
+uniform float uFogK;
+uniform float uHMax;
+uniform int uPad;
+uniform int uMaxD;
+uniform int uPeriodic;
+uniform vec2 uJitter;
+uniform vec3 uQ;             // camera seen from the planet's centre (altitudes)
+uniform float uCc;           // |uQ|^2 - uR^2, computed in double precision on the CPU
+uniform float uR;            // planet radius (altitudes)
+uniform float uRelief;       // terrain height, faded out high above the planet
+uniform float uClouds;       // cloud cover, seen only from high up
+uniform float uTime;
+uniform float uExposure;
+out vec4 outColor;
+${COMMON}
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+
+// Terrain height ramps from canyon floor to plateau as log2(distance / altitude)
+// goes from E0 to E1.
+const float E0 = -9.0;
+const float E1 = -3.0;
+
+void main() {
+  vec2 p = (gl_FragCoord.xy + uJitter - vec2(0.0, float(uPad)) - 0.5 * uRes) / uRes.y;
+  vec3 rd = normalize(uFwd + 2.0 * uTanHalf * (p.x * uRight + p.y * uUp));
+  vec3 fogCol = skyFog(normalize(vec3(rd.xy, 1e-4))) * 0.8;
+  vec3 col;
+  float rise = 0.0;
+  // The world is a planet of radius uR whose top is the target. Its surface is the
+  // complex plane wrapped on with an azimuthal-equidistant map: arc length from the
+  // target equals distance in c, so the dive below is unchanged.
+  float b = dot(rd, uQ);
+  float disc = b * b - uCc;
+  vec3 atmCol = mix(uHorizon, uGlow, 0.35);
+  if (b >= 0.0 || disc <= 0.0) {
+    col = skyCol(rd);
+    if (b < 0.0) {
+      // Seen from space: the atmosphere glows around the limb, brighter on the day side.
+      float miss = sqrt(max(uCc + uR * uR - b * b, 0.0)) - uR;
+      vec3 cp = normalize(uQ - rd * b);
+      float lit = 0.2 + 0.8 * smoothstep(-0.3, 0.6, dot(cp, uSunSky));
+      col += atmCol * exp(-max(miss, 0.0) / (0.035 * uR)) * (1.0 - uAtmo) * lit;
+    }
+  } else {
+    float t = uCc / (-b + sqrt(disc));           // distance, in altitudes (no cancellation)
+    vec3 Pw = uCam + t * rd;                     // hit point, relative to the target
+    float len = length(Pw.xy);
+    float th = atan(len, Pw.z + uR);             // angle from the target, at the planet's centre
+    vec2 dir = len > 0.0 ? Pw.xy / len : vec2(1.0, 0.0);
+    vec2 dc = dir * (uR * th) * uAlt;            // offset from the target, in c units
+    vec3 Ns = normalize(vec3(Pw.xy, Pw.z + uR)); // sphere normal
+    float cosi = max(dot(-rd, Ns), 0.02);
+    float fp = t * uAlt * (2.0 * uTanHalf / uRes.y) / sqrt(cosi);   // pixel footprint
+
+    vec2 Z = vec2(0.0), dz = vec2(0.0), z = vec2(0.0), der = vec2(0.0);
+    int m = 0;
+    bool esc = false, cycle = false;
+    float r2 = 0.0;
+    vec2 zs = vec2(1e9);      // periodicity check (Brent): only from high up, where
+    int pc = 0, ps = 2;       // float precision can still tell orbits apart
+    int i = 0;
+    while (i < uMaxIter) {
+      der = 2.0 * cmul(z, der) + vec2(1.0, 0.0);
+      dz = 2.0 * cmul(Z, dz) + cmul(dz, dz) + dc;
+      m++;
+      i++;
+      Z = texelFetch(uRef, ivec2(m & 2047, m >> 11), 0).xy;
+      z = Z + dz;
+      r2 = dot(z, z);
+      if (r2 > 1.0e6) { esc = true; break; }
+      if (r2 < dot(dz, dz) || m >= uRefLen - 1) { dz = z; m = 0; Z = vec2(0.0); }
+      if (uPeriodic == 1) {
+        vec2 dd = z - zs;
+        if (dot(dd, dd) < 1e-12) { cycle = true; break; }
+        if (++pc == ps) { zs = z; pc = 0; ps *= 2; }
+      }
+    }
+
+    vec3 V = -rd;
+    float hgt = 0.0;
+    float nu = float(uMaxIter), de = 0.0;
+    vec2 g = vec2(0.0);
+    bool lake = cycle;
+    if (esc) {
+      float lz = 0.5 * log(r2);
+      nu = float(i) + 1.0 - log2(lz / 6.907755);
+      float dm = max(abs(der.x), abs(der.y));
+      // The derivative can overflow on points hugging the set. The D3D compiler
+      // drops isinf/isnan, so test the range: a NaN fails both comparisons.
+      if (dm > 0.0 && dm < 1e30) {
+        vec2 dn = der / dm;
+        de = sqrt(r2) * lz / (dm * length(dn));
+        g = normalize(cmul(z * inversesqrt(r2), vec2(dn.x, -dn.y)));   // away from the set
+      }
+    } else if (!cycle) {
+      // Out of iterations. Inside the set the derivative settles; on the edge it
+      // explodes, so those pixels join the glowing canyon floor instead.
+      float dmi = max(abs(der.x), abs(der.y));
+      lake = dmi * fp < 2.0;
+    }
+    if (!lake) {
+      float dpx = de / fp;
+      float e = log2(max(de, 1e-37) / uAlt);
+      float s = clamp((e - E0) / (E1 - E0), 0.0, 1.0);
+      hgt = uHMax * uRelief * s * s * (3.0 - 2.0 * s);
+      float slope = uHMax * 6.0 * s * (1.0 - s) / (E1 - E0) / (exp2(e) * 0.6931);
+      slope = min(slope, 5.0) * smoothstep(0.3, 2.0, dpx);
+      // The c-plane gradient, carried onto the sphere's tangent plane.
+      vec3 er = vec3(cos(th) * dir, -sin(th));
+      vec3 ephi = vec3(-dir.y, dir.x, 0.0);
+      vec3 gW = dot(g, dir) * er + dot(g, vec2(-dir.y, dir.x)) * ephi;
+      vec3 N = normalize(Ns - gW * slope);
+      vec3 base = texture(uPal, vec2(pow(max(nu, 1.0), uPalExp) * uPalDensity + uPalShift, uPalRow)).rgb;
+      float dif = max(dot(N, uSun), 0.0);
+      float skyl = (0.5 + 0.5 * dot(N, Ns)) * mix(0.12, 1.0, smoothstep(-0.25, 0.2, dot(Ns, uSun)));
+      float spe = pow(max(dot(N, normalize(uSun + V)), 0.0), 40.0) * dif;
+      col = base * (uSunCol * dif * 0.75 + mix(uHorizon, uZenith, 0.3) * skyl * 0.8 + 0.1 * skyl) + uSunCol * spe * 0.25;
+      col *= mix(0.25, 1.0, s);                    // canyon floors sit in shadow
+      float glow = exp(-dpx * 0.5);                // the filaments glow
+      col += uGlow * glow * (1.0 - 0.7 * s) * 0.3;
+    } else {
+      // Inside the set: a dark glossy lake that mirrors the sky.
+      vec3 R = reflect(rd, Ns);
+      float fres = 0.04 + 0.96 * pow(1.0 - clamp(dot(V, Ns), 0.0, 1.0), 5.0);
+      col = uZenith * 0.15 + skyCol(R) * (0.12 + 0.88 * fres) * mix(0.25, 1.0, smoothstep(-0.25, 0.2, dot(Ns, uSun)));
+    }
+    // Clouds over the open sea far from the fractal continent, only from high up.
+    if (uClouds > 0.0) {
+      float cl = smoothstep(0.52, 0.78, fbm5(Ns * 3.5 + uSkySeed.yzx)) * smoothstep(0.6, 1.3, th) * uClouds;
+      col = mix(col, vec3(1.0, 0.97, 0.94) * (smoothstep(-0.15, 0.35, dot(Ns, uSun)) * 1.1 + 0.02), cl * 0.85);
+    }
+    col = mix(col, fogCol, (1.0 - exp(-t * uFogK)) * uAtmo);
+    // From space the limb is hazy with atmosphere.
+    float lit = 0.2 + 0.8 * smoothstep(-0.3, 0.6, dot(Ns, uSunSky));
+    col = mix(col, atmCol * lit, pow(1.0 - cosi, 3.0) * (1.0 - uAtmo) * 0.75);
+    // How many pixels up the screen the top of this terrain column lands.
+    vec3 P = t * rd;
+    vec3 P2 = P + Ns * hgt;
+    float focal = uRes.y / (2.0 * uTanHalf);
+    float dy = (dot(P2, uUp) / dot(P2, uFwd) - dot(P, uUp) / dot(P, uFwd)) * focal;
+    rise = max(clamp(dy / float(uMaxD), 0.0, 1.0), 1.5 / 255.0);   // 0 is kept for sky
+  }
+  col = aces(col * uExposure);
+  outColor = vec4(pow(col, vec3(1.0 / 2.2)), rise);
+}`;
+
+// Pass 2: voxel-space relief. Each pixel looks down its column for the nearest
+// ground point whose raised terrain reaches it; cliff faces darken toward the base.
+const RELIEF_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uG;
+uniform int uPad;
+uniform int uMaxD;
+uniform int uW;
+uniform int uDebug;
+out vec4 outColor;
+void main() {
+  ivec2 o = ivec2(gl_FragCoord.xy);
+  int yo = o.y + uPad;
+  vec4 hit = texelFetch(uG, ivec2(o.x, yo), 0);
+  if (uDebug == 1) { outColor = vec4(hit.rgb, 1.0); return; }
+  if (uDebug == 2) { outColor = vec4(vec3(hit.a), 1.0); return; }
+  float shade = 1.0;
+  int yb = yo;
+  for (int k = uMaxD; k > 0; k--) {
+    vec4 s = texelFetch(uG, ivec2(o.x, yo - k), 0);
+    float d = s.a * float(uMaxD);
+    if (float(k) <= d) { hit = s; yb = yo - k; shade = mix(0.7, 1.0, float(k) / d); break; }
+  }
+  // Low ground and far terrain are full of sub-pixel filaments; soften them so
+  // they glow instead of sparkling as the camera moves.
+  float soft = 1.0 - smoothstep(0.0, 0.08, hit.a);
+  if (soft > 0.0) {
+    vec3 avg = texelFetch(uG, ivec2(max(o.x - 1, 0), yb), 0).rgb + texelFetch(uG, ivec2(min(o.x + 1, uW - 1), yb), 0).rgb
+             + texelFetch(uG, ivec2(o.x, yb - 1), 0).rgb + texelFetch(uG, ivec2(o.x, yb + 1), 0).rgb;
+    hit.rgb = mix(hit.rgb, avg * 0.25, 0.6 * soft);
+  }
+  // Alpha tells the TAA pass where this pixel's ground is: rows down to the
+  // visible sample, or -1 for sky.
+  outColor = vec4(hit.rgb * shade, hit.a < 0.5 / 255.0 ? -1.0 : float(yo - yb));
+}`;
+
+// 3D fractal objects floating in space (y = up), ray marched with distance
+// estimates: Mandelbulb, Mandelbox, Menger sponge, quaternion Julia set,
+// kaleidoscopic IFS and Apollonian foam. A genome (kind + parameters) picks one.
+const BULB_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform vec2 uRes;
+uniform vec3 uCamPos;
+uniform vec3 uFwd;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform float uTanHalf;
+uniform int uKind;
+uniform vec4 uK;
+uniform vec4 uK2;
+uniform mat3 uRot;
+uniform float uObjScale;    // world -> fractal units
+uniform float uBound;       // bounding sphere radius (world)
+uniform int uNoSky;         // discovery renders: black background
+uniform sampler2D uPal;
+uniform float uPalRow;
+uniform float uPalShift;
+uniform vec3 uSun;
+uniform vec3 uZenith;
+uniform vec3 uHorizon;
+uniform vec3 uSunCol;
+uniform vec3 uGlow;
+uniform float uTime;
+uniform float uExposure;
+uniform int uShadows;
+uniform vec2 uJitter;
+out vec4 outColor;
+${COMMON}
+// Mandelbulb. uK.x = power, uK.y / uK.z = phase twists.
+float deBulb(vec3 p, out vec4 trap) {
+  vec3 w = p;
+  float m = dot(w, w);
+  trap = vec4(abs(w), m);
+  float dz = 1.0, pw = uK.x;
+  for (int i = 0; i < 7; i++) {
+    float r = sqrt(m);
+    dz = pw * pow(r, pw - 1.0) * dz + 1.0;
+    float th = pw * acos(clamp(w.y / r, -1.0, 1.0)) + uK.y;
+    float ph = pw * atan(w.x, w.z) + uK.z;
+    w = p + pow(r, pw) * vec3(sin(th) * sin(ph), cos(th), sin(th) * cos(ph));
+    trap = min(trap, vec4(abs(w), m));
+    m = dot(w, w);
+    if (m > 256.0) break;
+  }
+  return 0.25 * log(m) * sqrt(m) / dz;
+}
+// Mandelbox (Rrrola's form). uK.x = scale, uK.y = min radius squared, uK.z = fold limit.
+float deBox(vec3 p, out vec4 trap) {
+  float sc = uK.x, mr2 = uK.y, fl = uK.z > 0.0 ? uK.z : 1.0;
+  vec4 scalev = vec4(sc, sc, sc, abs(sc)) / mr2;
+  vec4 q = vec4(p, 1.0), q0 = q;
+  trap = vec4(1e9);
+  for (int i = 0; i < 13; i++) {
+    q.xyz = clamp(q.xyz, -fl, fl) * 2.0 - q.xyz;
+    float r2 = dot(q.xyz, q.xyz);
+    trap = min(trap, vec4(abs(q.xyz), r2));
+    q *= clamp(max(mr2 / r2, mr2), 0.0, 1.0);
+    q = q * scalev + q0;
+  }
+  return (length(q.xyz) - abs(sc - 1.0)) / q.w - pow(abs(sc), -12.0);
+}
+// Menger sponge. uK.x = twist per level (0 = the classic sponge).
+float deMenger(vec3 p, out vec4 trap) {
+  vec3 d3 = abs(p) - 1.0;
+  float d = min(max(d3.x, max(d3.y, d3.z)), 0.0) + length(max(d3, 0.0));
+  float sc = 1.0;
+  trap = vec4(abs(p), 0.05);
+  float ct = cos(uK.x), st = sin(uK.x);
+  vec3 q = p;
+  for (int m = 0; m < 5; m++) {
+    vec3 a = mod(q * sc, 2.0) - 1.0;
+    sc *= 3.0;
+    vec3 r = abs(1.0 - 3.0 * abs(a));
+    float da = max(r.x, r.y), db = max(r.y, r.z), dc = max(r.z, r.x);
+    float c = (min(da, min(db, dc)) - 1.0) / sc;
+    if (c > d) { d = c; trap = vec4(abs(a), float(m) * 0.2 + 0.05); }
+    q.xz = vec2(ct * q.x - st * q.z, st * q.x + ct * q.z);
+  }
+  return d;
+}
+// Quaternion Julia set. uK = c, uK2.x = the 4th coordinate of the slice.
+vec4 qsqr(vec4 a) { return vec4(a.x * a.x - dot(a.yzw, a.yzw), 2.0 * a.x * a.yzw); }
+float deJulia(vec3 p, out vec4 trap) {
+  vec4 z = vec4(p, uK2.x);
+  float md2 = 1.0, mz2 = dot(z, z);
+  trap = vec4(abs(z.xyz), mz2);
+  for (int i = 0; i < 11; i++) {
+    md2 *= 4.0 * mz2;
+    z = qsqr(z) + uK;
+    trap = min(trap, vec4(abs(z.xyz), dot(z, z)));
+    mz2 = dot(z, z);
+    if (mz2 > 4.0) break;
+  }
+  return 0.25 * sqrt(mz2 / md2) * log(mz2);
+}
+// Kaleidoscopic IFS. uK.x = scale, uK.y = fold (0 octahedral, 1 tetrahedral),
+// uK2.xyz = offset, uRot = rotation applied at every fold.
+float deKifs(vec3 p, out vec4 trap) {
+  float sc = uK.x, k = 1.0;
+  vec3 off = uK2.xyz;
+  trap = vec4(1e9);
+  for (int i = 0; i < 9; i++) {
+    if (uK.y > 0.5) {
+      if (p.x + p.y < 0.0) p.xy = -p.yx;
+      if (p.x + p.z < 0.0) p.xz = -p.zx;
+      if (p.y + p.z < 0.0) p.zy = -p.yz;
+    } else {
+      p = abs(p);
+      if (p.x < p.y) p.xy = p.yx;
+      if (p.x < p.z) p.xz = p.zx;
+      if (p.y < p.z) p.yz = p.zy;
+    }
+    p = uRot * p;
+    p = p * sc - off * (sc - 1.0);
+    if (uK.y < 0.5 && p.z < -0.5 * off.z * (sc - 1.0)) p.z += off.z * (sc - 1.0);
+    k *= sc;
+    trap = min(trap, vec4(abs(p), dot(p, p)));
+  }
+  float leaf = uK.y > 0.5 ? length(p) - 1.2 : max(abs(p.x), max(abs(p.y), abs(p.z))) - 1.0;
+  return leaf / k;
+}
+// Apollonian foam cut to a ball. uK.x = inversion strength, uK.y = lattice scale.
+float deApollo(vec3 p, out vec4 trap) {
+  vec3 q = p * uK.y;
+  float scale = 1.0;
+  trap = vec4(1e9);
+  for (int i = 0; i < 8; i++) {
+    q = -1.0 + 2.0 * fract(0.5 * q + 0.5);
+    float r2 = dot(q, q);
+    trap = min(trap, vec4(abs(q), r2));
+    float k = uK.x / r2;
+    q *= k;
+    scale *= k;
+  }
+  return max(0.25 * abs(q.y) / scale / uK.y, length(p) - 1.0);
+}
+float mapBulb(vec3 p, out vec4 trap) {
+  vec3 q = p * uObjScale;
+  float d;
+  if (uKind == 0) d = deBulb(q, trap);
+  else if (uKind == 1) d = deBox(q, trap);
+  else if (uKind == 2) d = deMenger(q, trap);
+  else if (uKind == 3) d = deJulia(q, trap);
+  else if (uKind == 4) d = deKifs(q, trap);
+  else d = deApollo(q, trap);
+  return d / uObjScale;
+}
+vec3 calcNormal(vec3 p, float e) {
+  vec4 tr;
+  const vec2 k = vec2(1.0, -1.0);
+  return normalize(k.xyy * mapBulb(p + k.xyy * e, tr) + k.yyx * mapBulb(p + k.yyx * e, tr) +
+                   k.yxy * mapBulb(p + k.yxy * e, tr) + k.xxx * mapBulb(p + k.xxx * e, tr));
+}
+float softShadow(vec3 ro, vec3 rd) {
+  float res = 1.0, t = 0.004;
+  vec4 tr;
+  for (int i = 0; i < 48; i++) {
+    float h = mapBulb(ro + rd * t, tr);
+    res = min(res, 10.0 * h / t);
+    t += clamp(h, 0.004, 0.15);
+    if (res < 0.02 || t > 2.5) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+float calcAO(vec3 p, vec3 n) {
+  float occ = 0.0, sca = 1.0;
+  vec4 tr;
+  for (int i = 0; i < 5; i++) {
+    float h = 0.005 + 0.03 * float(i);
+    occ += (h - mapBulb(p + n * h, tr)) * sca;
+    sca *= 0.8;
+  }
+  return clamp(1.0 - 4.0 * occ, 0.0, 1.0);
+}
+void main() {
+  vec2 p = (gl_FragCoord.xy + uJitter - 0.5 * uRes) / uRes.y;
+  vec3 rd = normalize(uFwd + 2.0 * uTanHalf * (p.x * uRight + p.y * uUp));
+  vec3 ro = uCamPos;
+  float depth = -1.0;   // ray length for the TAA pass, -1 = sky
+  float px = 2.0 * uTanHalf / uRes.y;
+  vec3 col = uNoSky == 1 ? vec3(0.0) : skyCol(vec3(rd.x, rd.z, rd.y));   // sky coordinates are z-up
+  float b = dot(ro, rd);
+  float h = b * b - (dot(ro, ro) - uBound * uBound);
+  if (h > 0.0) {
+    h = sqrt(h);
+    float t = max(-b - h, 0.0);
+    float tEnd = -b + h;
+    vec4 trap = vec4(0.0);
+    bool hit = false;
+    float glow = 0.0;
+    for (int i = 0; i < 200; i++) {
+      float d = mapBulb(ro + rd * t, trap);
+      glow += exp(-d * 22.0);
+      if (d < max(px * t * 0.7, 1e-5)) { hit = true; break; }
+      t += d * 0.95;
+      if (t > tEnd) break;
+    }
+    if (hit) {
+      depth = t;
+      vec3 pos = ro + rd * t;
+      vec3 n = calcNormal(pos, max(px * t * 0.5, 1e-5));
+      float occ = calcAO(pos, n);
+      float sha = uShadows == 1 ? softShadow(pos + n * 0.003, uSun) : 1.0;
+      float ci = uPalShift + sqrt(trap.w) * 1.15 + trap.y * 0.55 + trap.x * 0.25;
+      vec3 base = texture(uPal, vec2(ci, uPalRow)).rgb;
+      float dif = clamp(dot(n, uSun), 0.0, 1.0) * sha;
+      float skyl = 0.5 + 0.5 * n.y;
+      float fre = pow(clamp(1.0 + dot(n, rd), 0.0, 1.0), 3.0);
+      float spe = pow(clamp(dot(n, normalize(uSun - rd)), 0.0, 1.0), 40.0) * dif;
+      vec3 lin = uSunCol * dif * 2.0 + mix(uHorizon, uZenith, 0.4) * skyl * 1.1 * occ
+               + uGlow * fre * 1.3 * occ + vec3(0.06) * occ;
+      col = base * lin + uSunCol * spe * 0.6;
+    } else {
+      if (uNoSky == 0) col += uGlow * glow * 0.006;
+    }
+  }
+  col = aces(col * uExposure);
+  outColor = vec4(pow(col, vec3(1.0 / 2.2)), depth);
+}`;
+
+// Temporal anti-aliasing. Finds where this pixel's surface point was on screen
+// last frame, blends with the history there, and clamps the history to this
+// frame's 3x3 neighbourhood so moving edges do not smear. Sub-pixel detail that
+// used to sparkle frame to frame settles into a steady average.
+const TAA_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+uniform sampler2D uCur;      // this frame: rgb colour, a = depth code (see uMode)
+uniform sampler2D uHist;     // previous TAA result
+uniform int uMode;           // 0 Mandelbrot: a = rows down to the ground sample; 1 Mandelbulb: a = ray length; -1 = sky
+uniform int uValid;
+uniform vec2 uRes;
+uniform vec2 uJitter;
+uniform vec3 uCam;
+uniform vec3 uFwd;
+uniform vec3 uRight;
+uniform vec3 uUp;
+uniform float uTanHalf;
+uniform vec3 uPCam;
+uniform vec3 uPFwd;
+uniform vec3 uPRight;
+uniform vec3 uPUp;
+uniform float uPTanHalf;
+uniform vec2 uHistScale;
+uniform vec2 uHistMax;
+uniform float uKeep;
+uniform vec3 uQ;
+uniform float uCc;
+uniform float uR;
+out vec4 outColor;
+vec3 rayDir(vec2 px) {
+  vec2 p = (px + uJitter - 0.5 * uRes) / uRes.y;
+  return normalize(uFwd + 2.0 * uTanHalf * (p.x * uRight + p.y * uUp));
+}
+void main() {
+  ivec2 o = ivec2(gl_FragCoord.xy);
+  vec4 c = texelFetch(uCur, o, 0);
+  if (uValid == 0) { outColor = vec4(c.rgb, 1.0); return; }
+  vec3 mn = c.rgb, mx = c.rgb;
+  ivec2 hi = ivec2(uRes) - 1;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec3 s = texelFetch(uCur, clamp(o + ivec2(dx, dy), ivec2(0), hi), 0).rgb;
+      mn = min(mn, s);
+      mx = max(mx, s);
+    }
+  }
+  vec3 v;
+  if (c.a < 0.0) {
+    v = rayDir(gl_FragCoord.xy);                       // sky: direction only
+  } else if (uMode == 0) {
+    // The visible point is on the terrain column standing on the ground sample
+    // c.a rows below: where this pixel's ray meets that vertical line.
+    vec3 rb = rayDir(gl_FragCoord.xy - vec2(0.0, c.a));
+    float bb = dot(rb, uQ);
+    float tb = uCc / (-bb + sqrt(max(bb * bb - uCc, 0.0)));
+    vec3 B = uCam + tb * rb;
+    vec3 NB = normalize(vec3(B.xy, B.z + uR));
+    vec3 rd = rayDir(gl_FragCoord.xy);
+    vec3 w0 = uCam - B;
+    float bn = dot(rd, NB);
+    float den = 1.0 - bn * bn;
+    float t = den > 1e-5 ? (bn * dot(NB, w0) - dot(rd, w0)) / den : tb;
+    v = uCam + t * rd - uPCam;
+  } else {
+    v = uCam + c.a * rayDir(gl_FragCoord.xy) - uPCam;
+  }
+  vec3 col = c.rgb;
+  float z = dot(v, uPFwd);
+  if (z > 1e-6) {
+    vec2 q = vec2(dot(v, uPRight), dot(v, uPUp)) / (z * 2.0 * uPTanHalf);
+    vec2 uv = vec2(q.x * uRes.y / uRes.x + 0.5, q.y + 0.5);
+    if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) {
+      vec3 h = clamp(texture(uHist, min(uv * uHistScale, uHistMax)).rgb, mn, mx);
+      col = mix(c.rgb, h, uKeep);
+    }
+  }
+  outColor = vec4(col, 1.0);
+}`;
+
+// Upscales the scene targets to the screen and cross-fades between scenes.
+const COMP_FS = `#version 300 es
+precision highp float;
+uniform sampler2D uA;
+uniform sampler2D uB;
+uniform float uMix;
+uniform vec2 uScale;
+uniform vec2 uMaxUv;
+uniform float uFade;
+uniform float uTime;
+in vec2 vUv;
+out vec4 outColor;
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+void main() {
+  vec2 uv = min(vUv * uScale, uMaxUv);
+  vec3 c = mix(texture(uA, uv).rgb, texture(uB, uv).rgb, uMix);
+  vec2 q = vUv - 0.5;
+  c *= (1.0 - 0.35 * dot(q, q)) * uFade;
+  c += (hash12(gl_FragCoord.xy + fract(uTime * 7.13) * 311.0) - 0.5) / 255.0;
+  outColor = vec4(c, 1.0);
+}`;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) || 'Shader did not compile');
+  return s;
+}
+function makeProgram(fs) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) || 'Program did not link');
+  const loc = {};
+  return { p, u(name) { if (!(name in loc)) loc[name] = gl.getUniformLocation(p, name); return loc[name]; } };
+}
+
+let progs;
+try {
+  progs = { mandel: makeProgram(MANDEL_FS), relief: makeProgram(RELIEF_FS), bulb: makeProgram(BULB_FS), taa: makeProgram(TAA_FS), comp: makeProgram(COMP_FS) };
+} catch (e) { fail(e.message); return; }
+gl.bindVertexArray(gl.createVertexArray());
+
+// Palette texture: one 256-texel row per palette, blended in OKLab, sRGB storage.
+const palTex = gl.createTexture();
+(function buildPalettes() {
+  const W = 256, data = new Uint8Array(W * PALETTES.length * 4);
+  PALETTES.forEach((p, row) => {
+    const labs = p.stops.map(h => linToOklab(hexLin(h)));
+    for (let i = 0; i < W; i++) {
+      const x = i / W * (labs.length - 1), k = Math.floor(x), f = x - k;
+      const a = labs[k], b = labs[k + 1];
+      const rgb = oklabToLin([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]);
+      const o = (row * W + i) * 4;
+      for (let c = 0; c < 3; c++) data[o + c] = Math.round(clamp(l2s(clamp(rgb[c], 0, 1)), 0, 1) * 255);
+      data[o + 3] = 255;
+    }
+  });
+  gl.bindTexture(gl.TEXTURE_2D, palTex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.SRGB8_ALPHA8, W, PALETTES.length, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+})();
+
+function bindPalette(P, pi) {
+  const pal = PALETTES[pi];
+  gl.activeTexture(gl.TEXTURE1);
+  gl.bindTexture(gl.TEXTURE_2D, palTex);
+  gl.uniform1i(P.u('uPal'), 1);
+  gl.uniform1f(P.u('uPalRow'), (pi + 0.5) / PALETTES.length);
+  gl.uniform3fv(P.u('uZenith'), pal.zenithL);
+  gl.uniform3fv(P.u('uHorizon'), pal.horizonL);
+  gl.uniform3fv(P.u('uSunCol'), pal.sunL);
+  gl.uniform3fv(P.u('uGlow'), pal.glowL);
+}
+
+// Reference orbit as an RG32F texture, 2048 texels per row.
+function uploadRef(data, len) {
+  const W = 2048, rows = Math.ceil(len / W);
+  const buf = new Float32Array(W * rows * 2);
+  buf.set(data.subarray(0, len * 2));
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, W, rows, 0, gl.RG, gl.FLOAT, buf);
+  return tex;
+}
+
+// Each frame a scene renders into sceneTgt (colour + a depth code in alpha), then
+// the TAA pass blends it with that scene's history into the other history
+// texture; the composite pass stretches the newest history to the screen.
+// Scenes render into the lower-left renderScale part of these full-size textures.
+// The G-buffer holds the Mandelbrot pass 1 output, with extra rows below the
+// screen so terrain just out of view can still rise into it.
+const RELIEF_PAD = 0.1;   // fraction of the height
+const floatTargets = !!gl.getExtension('EXT_color_buffer_float');
+const TAA = floatTargets && Q.get('taa') !== '0';
+const newTarget = () => ({ tex: gl.createTexture(), fbo: gl.createFramebuffer() });
+const sceneTgt = newTarget();
+const slots = [0, 1].map(() => ({ hist: [newTarget(), newTarget()], cur: 0 }));
+const gbuf = newTarget();
+let W = 0, H = 0, histEpoch = 0;
+function allocTarget(t, w, h, internal, format, type) {
+  gl.bindTexture(gl.TEXTURE_2D, t.tex);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internal || gl.RGBA8, w, h, 0, format || gl.RGBA, type || gl.UNSIGNED_BYTE, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.tex, 0);
+}
+function resize() {
+  // The scene is rendered at well under full resolution anyway, so a high-DPI
+  // backing store (4K at 150%) only costs GPU time to present: keep it at 1x.
+  const dpr = Math.min(window.devicePixelRatio || 1, num(Q.get('dpr'), 1));
+  const w = Math.max(1, Math.round(innerWidth * dpr)), h = Math.max(1, Math.round(innerHeight * dpr));
+  if (w === W && h === H) return;
+  W = canvas.width = w; H = canvas.height = h;
+  if (floatTargets) allocTarget(sceneTgt, W, H, gl.RGBA16F, gl.RGBA, gl.HALF_FLOAT);
+  else allocTarget(sceneTgt, W, H);
+  for (const sl of slots) {
+    for (const t of sl.hist) {
+      if (floatTargets) allocTarget(t, W, H, gl.R11F_G11F_B10F, gl.RGB, gl.HALF_FLOAT);
+      else allocTarget(t, W, H);
+    }
+  }
+  allocTarget(gbuf, W, Math.ceil(H * (1 + RELIEF_PAD)) + 2);
+  histEpoch++;
+}
+
+// Sub-pixel jitter (Halton 2,3 over 8 frames): over a few frames TAA sees every
+// pixel at several positions, which is what smooths the sub-pixel detail.
+function halton(i, b) { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; }
+let frameNo = 0, jitter = [0, 0];
+const JITTER = 0;   // sub-pixel jitter (pixels). 0: jitter made fine detail shimmer at wallpaper frame rates
+
+function runTaa(s, rw, rh) {
+  const slot = slots[s.slot];
+  const src = slot.hist[slot.cur], dst = slot.hist[1 - slot.cur];
+  gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo);
+  gl.viewport(0, 0, rw, rh);
+  const P = progs.taa;
+  gl.useProgram(P.p);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, sceneTgt.tex);
+  gl.uniform1i(P.u('uCur'), 0);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, src.tex);
+  gl.uniform1i(P.u('uHist'), 1);
+  const now = { pos: s.cam, f: s.b.f, right: s.b.right, up: s.b.up, tanHalf: Math.tan(s.fov / 2), alt: s.alt || 1, rw, rh, epoch: histEpoch };
+  const prev = TAA && s.prev && s.prev.epoch === histEpoch ? s.prev : null;
+  gl.uniform1i(P.u('uValid'), prev ? 1 : 0);
+  gl.uniform1i(P.u('uMode'), s.kind === 'mandel' ? 0 : 1);
+  gl.uniform2f(P.u('uRes'), rw, rh);
+  gl.uniform2f(P.u('uJitter'), jitter[0], jitter[1]);
+  gl.uniform3fv(P.u('uCam'), now.pos);
+  gl.uniform3fv(P.u('uFwd'), now.f);
+  gl.uniform3fv(P.u('uRight'), now.right);
+  gl.uniform3fv(P.u('uUp'), now.up);
+  gl.uniform1f(P.u('uTanHalf'), now.tanHalf);
+  if (prev) {
+    // Mandelbrot cameras live in altitude units, which shrink as the camera descends.
+    gl.uniform3fv(P.u('uPCam'), s.kind === 'mandel' ? scl(prev.pos, prev.alt / now.alt) : prev.pos);
+    gl.uniform3fv(P.u('uPFwd'), prev.f);
+    gl.uniform3fv(P.u('uPRight'), prev.right);
+    gl.uniform3fv(P.u('uPUp'), prev.up);
+    gl.uniform1f(P.u('uPTanHalf'), prev.tanHalf);
+    gl.uniform2f(P.u('uHistScale'), prev.rw / W, prev.rh / H);
+    gl.uniform2f(P.u('uHistMax'), (prev.rw - 0.5) / W, (prev.rh - 0.5) / H);
+  }
+  gl.uniform1f(P.u('uKeep'), 0.9);
+  if (s.kind === 'mandel') {
+    gl.uniform3fv(P.u('uQ'), s.q);
+    gl.uniform1f(P.u('uCc'), s.Cc);
+    gl.uniform1f(P.u('uR'), s.R);
+  }
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  slot.cur = 1 - slot.cur;
+  s.prev = now;
+}
+const sceneImage = s => slots[s.slot].hist[slots[s.slot].cur].tex;
+
+// ---------------------------------------------------------------- destinations
+const finder = finderModule(null);
+const seed0 = STILL ? (num(Q.get('seed'), 1) | 0) : ((Date.now() ^ (Math.random() * 4294967296)) >>> 0);
+const rng = finder.mulberry32(seed0);
+let worker = null;
+const pending = new Map();
+let reqId = 0;
+if (!STILL) {
+  try {
+    const src = '(' + finderModule.toString() + ')(self);';
+    worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    worker.onmessage = e => {
+      const job = pending.get(e.data.id);
+      pending.delete(e.data.id);
+      if (job) job.cb(e.data.res);
+    };
+    worker.onerror = () => {
+      worker = null;
+      for (const job of pending.values()) setTimeout(() => job.cb(finder.findDestination(job.seed, job.opts)), 0);
+      pending.clear();
+    };
+  } catch (e) { worker = null; }
+}
+function requestDestination(seed, opts, cb) {
+  if (worker) {
+    const id = ++reqId;
+    pending.set(id, { seed, opts, cb });
+    worker.postMessage({ id, seed, opts });
+  } else {
+    setTimeout(() => cb(finder.findDestination(seed, opts)), 0);
+  }
+}
+
+let lastPal = -1;
+function pickPalette() {
+  if (FORCE_PAL != null) return clamp(FORCE_PAL, 0, PALETTES.length - 1);
+  let p;
+  do { p = Math.floor(rng() * PALETTES.length); } while (p === lastPal && PALETTES.length > 1);
+  return (lastPal = p);
+}
+
+function zoomWords(z) {
+  const units = [[1e12, 'trillion'], [1e9, 'billion'], [1e6, 'million'], [1e3, 'thousand']];
+  for (const [v, w] of units) if (z >= v) return (z / v).toFixed(z / v < 10 ? 1 : 0) + ' ' + w;
+  return Math.round(z) + '';
+}
+
+// ---------------------------------------------------------------- space
+// Each flight gets its own sky (z-up "sky coordinates"): a big spiral galaxy, five
+// more, one or two gas giants (rings on most), up to two moons and a Milky Way band,
+// spread roughly every 45 degrees so the orbiting camera always has one in view.
+function dirAt(az, el) { return [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)]; }
+function makeSky() {
+  const az0 = rng() * Math.PI * 2, slot = k => az0 + k * Math.PI / 4 + (rng() - 0.5) * 0.5;
+  const gal = [], galB = [];
+  const addGal = (az, rad, el) => {
+    gal.push(...dirAt(az, el * DEG), rad);
+    galB.push(rng() * Math.PI, 0.3 + rng() * 0.65, 2 + Math.floor(rng() * 3), rng());
+  };
+  const second = rng() < 0.55;                      // a second, smaller gas giant
+  addGal(slot(0), 0.16 + rng() * 0.12, 18 + rng() * 26);            // the big one
+  addGal(second ? slot(2) : slot(6), 0.07 + rng() * 0.05, 15 + rng() * 30);
+  for (const k of [1, 3, 5, 7]) addGal(slot(k), 0.02 + rng() * 0.05, 9 + rng() * 38);
+  const planet = (az, rad, el) => [...dirAt(az, el), rad];
+  const axis = () => norm([rng() - 0.5, rng() - 0.5, 1.2 + rng()]);
+  const pAz = slot(4), pRad = (7 + rng() * 7) * DEG, pEl = (4 + rng() * 18) * DEG;
+  const qAz = slot(6), qRad = (2.5 + rng() * 2.5) * DEG, qEl = (14 + rng() * 22) * DEG;
+  const moonNear = (az, rad, el) => [...dirAt(az + (rng() < 0.5 ? -1 : 1) * (rad * 1.8 + 0.1 + rng() * 0.25), el + (4 + rng() * 14) * DEG), (0.8 + rng() * 1.2) * DEG];
+  return {
+    gal: new Float32Array(gal), galB: new Float32Array(galB),
+    planet: new Float32Array([...planet(pAz, pRad, pEl), ...(second ? planet(qAz, qRad, qEl) : [0, 0, 1, 0])]),
+    axis: new Float32Array([...axis(), ...axis()]),
+    planetB: new Float32Array([2.5 + rng() * 4, rng(), rng() < 0.6 ? 1 : 0, rng() * 6.28, 2 + rng() * 5, rng(), rng() < 0.3 ? 1 : 0, rng() * 6.28]),
+    moon: new Float32Array([...(rng() < 0.75 ? moonNear(pAz, pRad, pEl) : [0, 0, 1, 0]),
+                            ...(rng() < 0.4 ? moonNear(second ? qAz : pAz + 1.2, qRad, qEl) : [0, 0, 1, 0])]),
+    bandN: norm([rng() - 0.5, rng() - 0.5, (rng() - 0.5) * 1.2]),
+    seed: [rng() * 100, rng() * 100, rng() * 100],
+  };
+}
+function bindSky(P, sky, sunSky, atmo, pxAng) {
+  gl.uniform3fv(P.u('uSunSky'), sunSky);
+  gl.uniform1f(P.u('uPxAng'), pxAng);
+  gl.uniform1f(P.u('uAtmo'), atmo);
+  gl.uniform3fv(P.u('uSkySeed'), sky.seed);
+  gl.uniform3fv(P.u('uBandN'), sky.bandN);
+  gl.uniform4fv(P.u('uGal[0]'), sky.gal);
+  gl.uniform4fv(P.u('uGalB[0]'), sky.galB);
+  gl.uniform4fv(P.u('uPlanet[0]'), sky.planet);
+  gl.uniform3fv(P.u('uPlanetAxis[0]'), sky.axis);
+  gl.uniform4fv(P.u('uPlanetB[0]'), sky.planetB);
+  gl.uniform4fv(P.u('uMoon[0]'), sky.moon);
+}
+
+// ---------------------------------------------------------------- scenes
+// A Mandelbrot flight: the camera spirals down toward a deep minibrot,
+// orbiting it while the altitude halves every few seconds.
+class MandelScene {
+  constructor(dest) {
+    this.kind = 'mandel';
+    this.dest = dest;
+    this.pal = pickPalette();
+    this.t = 0;
+    // Every flight starts out in space, the planet filling about a third of the view.
+    const hEnd = Math.max(dest.size * (2.6 + rng() * 1.4), 4e-12);
+    const hStart = PLANET_R * (3.2 + rng() * 0.8);
+    this.L0 = Math.log2(hStart);
+    this.L1 = Math.log2(hEnd);
+    this.duration = (this.L0 - this.L1) / 0.2;   // 0.2 halvings per second
+    this.phi0 = rng() * Math.PI * 2;
+    this.omega = (rng() < 0.5 ? -1 : 1) * Math.PI * 2 / (110 + rng() * 70);   // one lap in 110-180 s
+    this.r0 = 1.9 + rng() * 0.7;
+    this.rph = rng() * 6.28;
+    this.aim = (6 + rng() * 6) * DEG;   // view centre this far below the horizon
+    this.fovFlat = (58 + rng() * 8) * DEG;
+    const az = rng() * Math.PI * 2, el = (12 + rng() * 16) * DEG;
+    this.sun = [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
+    this.fogK = 0.014 + rng() * 0.012;
+    this.hMax = 0.09 + rng() * 0.05;   // plateau height, in altitudes
+    this.palDensity = 0.09 + rng() * 0.06;
+    this.palShift = rng();
+    this.refTex = uploadRef(dest.ref, dest.refLen);
+    this.sky = makeSky();
+    this.update(0);
+  }
+  title() { return this.dest.name || this.dest.region; }
+  subtitle() { return (this.dest.name ? this.dest.region + ', period ' : 'Period ') + this.dest.period.toLocaleString('en-US') + ' minibrot, ' + zoomWords(Math.pow(2, -this.L1)) + ' times closer'; }
+  update(dt) {
+    this.t += dt;
+    const u = Math.min(this.t / this.duration, 1);
+    const e = u - 0.55 * Math.sin(2 * Math.PI * u) / (2 * Math.PI);
+    const h = Math.pow(2, this.L0 + (this.L1 - this.L0) * e);   // altitude, c units
+    this.alt = h;
+    const phi = this.phi0 + this.omega * this.t;
+    const r = this.r0 * (1 + 0.12 * Math.sin(this.t * 0.07 + this.rph));
+    // Camera: altitude h above the planet, r*h along the surface from the target
+    // (at most ~50 degrees round the globe when far out). Positions in altitudes.
+    // Far out the camera can sit up to ~50 degrees round the globe; it swings in over the
+    // fractal continent as it comes down.
+    const beta = Math.min(r * h / PLANET_R, clamp(0.22 + 0.3 * h / PLANET_R, 0.22, 0.9));
+    const R = PLANET_R / h, k = R + 1, sb = Math.sin(beta), cb = Math.cos(beta);
+    this.q = [k * sb * Math.cos(phi), k * sb * Math.sin(phi), k * cb];
+    this.cam = [this.q[0], this.q[1], cb - 2 * R * Math.sin(beta / 2) ** 2];   // = k cos(beta) - R, no cancellation
+    this.R = R;
+    this.Cc = 2 * R + 1;
+    const localUp = norm(this.q);
+    // Low down: look at the target, tilted up so the horizon shows. Far out: look
+    // between the planet's centre and the target, so the globe sits in the frame.
+    const toT = norm(scl(this.cam, -1));
+    const below = Math.asin(clamp(-dot(toT, localUp), -1, 1));
+    const dip = Math.acos(R / (R + 1));   // how far the real horizon sits below level up here
+    const flat = basis(toT, localUp, below - this.aim - dip, 0);
+    const w = smooth(0.12, 0.6, h / PLANET_R);
+    const lookDepth = 0.75 * smooth(0.2, 2.0, h / PLANET_R);   // centre of the globe far out, the continent closer in
+    const f = norm(add(scl(flat.f, 1 - w), scl(norm(sub([0, 0, -lookDepth * R], this.cam)), w)));
+    this.fov = this.fovFlat + (36 * DEG - this.fovFlat) * w;   // a longer lens from space: no egg-shaped planet
+    this.b = basis(f, norm(add(scl(localUp, 1 - w), scl([0, 0, 1], w))), 0, 0);
+    this.atmo = 1 - smooth(0.04, 0.25, h / PLANET_R);
+    this.relief = 1 - smooth(0.03, 0.3, h / PLANET_R);
+    this.clouds = smooth(0.08, 0.5, h / PLANET_R);
+  }
+  maxIter() {
+    const L = Math.max(0, -Math.log2(this.alt));
+    let it = (160 + 115 * L) * QUALITY[settings.quality].iterMul;
+    if (this.alt < this.dest.size * 400) it = Math.max(it, this.dest.period * 3.2);
+    return Math.max(300, Math.min(this.dest.refLen - 1, Math.round(it)));
+  }
+  render(tgt, w, h, time) {
+    const pad = Math.max(1, Math.round(h * RELIEF_PAD));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, gbuf.fbo);
+    gl.viewport(0, 0, w, h + pad);
+    const P = progs.mandel;
+    gl.useProgram(P.p);
+    gl.uniform2f(P.u('uRes'), w, h);
+    gl.uniform1i(P.u('uPad'), pad);
+    gl.uniform1i(P.u('uMaxD'), pad);
+    gl.uniform1f(P.u('uHMax'), this.hMax);
+    gl.uniform1i(P.u('uPeriodic'), this.alt > 1e-4 ? 1 : 0);
+    gl.uniform2f(P.u('uJitter'), jitter[0], jitter[1]);
+    gl.uniform3fv(P.u('uCam'), this.cam);
+    gl.uniform3fv(P.u('uFwd'), this.b.f);
+    gl.uniform3fv(P.u('uRight'), this.b.right);
+    gl.uniform3fv(P.u('uUp'), this.b.up);
+    gl.uniform1f(P.u('uTanHalf'), Math.tan(this.fov / 2));
+    gl.uniform1f(P.u('uAlt'), this.alt);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.refTex);
+    gl.uniform1i(P.u('uRef'), 0);
+    gl.uniform1i(P.u('uRefLen'), this.dest.refLen);
+    gl.uniform1i(P.u('uMaxIter'), this.maxIter());
+    bindPalette(P, this.pal);
+    gl.uniform1f(P.u('uPalDensity'), this.palDensity);
+    gl.uniform1f(P.u('uPalShift'), this.palShift + this.t * 0.005);
+    gl.uniform1f(P.u('uPalExp'), 0.5);
+    gl.uniform3fv(P.u('uSun'), this.sun);
+    gl.uniform1f(P.u('uFogK'), this.fogK);
+    gl.uniform1f(P.u('uTime'), time);
+    gl.uniform1f(P.u('uExposure'), 1.15);
+    bindSky(P, this.sky, this.sun, this.atmo, 2 * Math.tan(this.fov / 2) / h);
+    gl.uniform3fv(P.u('uQ'), this.q);
+    gl.uniform1f(P.u('uCc'), this.Cc);
+    gl.uniform1f(P.u('uR'), this.R);
+    gl.uniform1f(P.u('uRelief'), this.relief);
+    gl.uniform1f(P.u('uClouds'), this.clouds);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tgt.fbo);
+    gl.viewport(0, 0, w, h);
+    const R = progs.relief;
+    gl.useProgram(R.p);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, gbuf.tex);
+    gl.uniform1i(R.u('uG'), 2);
+    gl.uniform1i(R.u('uPad'), pad);
+    gl.uniform1i(R.u('uMaxD'), pad);
+    gl.uniform1i(R.u('uW'), w);
+    gl.uniform1i(R.u('uDebug'), num(Q.get('debug'), 0) | 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  info() { return { kind: this.kind, region: this.dest.region, regionIndex: this.dest.regionIndex, period: this.dest.period, size: this.dest.size, x: this.dest.x, y: this.dest.y, alt: this.alt, maxIter: this.maxIter(), duration: this.duration, pal: PALETTES[this.pal].name }; }
+  dispose() {
+    gl.deleteTexture(this.refTex);
+  }
+}
+
+// 3D fractal objects. A genome is { kind, k: [4], k2: [4], rot: [3 angles],
+// scale: world -> fractal units, near: closest camera distance }; the object
+// always fits inside radius ~1.2, so every visit can use the same flight path.
+const OBJECT_KINDS = [
+  { name: 'Mandelbulb', sub: 'The Mandelbrot set in three dimensions' },
+  { name: 'Mandelbox', sub: 'A box folded into itself, over and over' },
+  { name: 'Menger Sponge', sub: 'A cube with holes in its holes, all the way down' },
+  { name: 'Quaternion Julia', sub: 'A Julia set from four dimensions, sliced to three' },
+  { name: 'Kaleidoscope Crystal', sub: 'Space folded like a kaleidoscope' },
+  { name: 'Apollonian Foam', sub: 'Spheres packed inside spheres' },
+];
+function randomGenome(kind, r) {
+  const g = { kind, k: [0, 0, 0, 0], k2: [0, 0, 0, 0], rot: [0, 0, 0], scale: 1, near: 1.45 };
+  if (kind === 0) {
+    g.k = [3 + r() * 7, r() < 0.5 ? 0 : (r() - 0.5) * 1.2, r() < 0.5 ? 0 : (r() - 0.5) * 1.2, 0];
+    g.near = 1.4;
+  } else if (kind === 1) {
+    const sc = r() < 0.6 ? -(1.3 + r() * 1.7) : 1.6 + r() * 1.9;
+    g.k = [sc, 0.05 + r() * 0.55, 0.6 + r() * 0.8, 0];
+    g.scale = Math.min(2 * (Math.abs(sc) + 1) / (Math.abs(sc) - 1), 10) * 1.6 / 1.15;
+  } else if (kind === 2) {
+    g.k = [r() < 0.5 ? 0 : (r() - 0.5) * 0.7, 0, 0, 0];
+    g.scale = 1.75 / 1.15;
+  } else if (kind === 3) {
+    const tt = r() * 100, v = [0.5, 3.9, 1.4, 1.1], w = [1.2, 1.7, 1.3, 2.5];
+    g.k = v.map((a, i) => 0.45 * Math.cos(a + tt * w[i]) - (i === 0 ? 0.3 : 0));
+    g.k2 = [(r() - 0.5) * 0.4, 0, 0, 0];
+    g.scale = 1.3;
+    g.near = 1.5;
+  } else if (kind === 4) {
+    const sc = 2 + r(), fold = r() < 0.35 ? 1 : 0;
+    const off = norm([0.6 + r() * 0.6, 0.6 + r() * 0.6, 0.6 + r() * 0.6]).map(v => v * (1.5 + r() * 0.5));
+    g.k = [sc, fold, 0, 0];
+    g.k2 = [...off, 0];
+    g.rot = [(r() - 0.5) * 0.8, (r() - 0.5) * 0.8, (r() - 0.5) * 0.8];
+    g.scale = Math.hypot(...off) * sc / (sc - 1) / 1.1;
+  } else {
+    g.k = [1.0 + r() * 0.45, 1.6 + r() * 1.6, 0, 0];
+    g.near = 1.35;
+  }
+  return g;
+}
+function rotMat(a) {   // column-major mat3 from three angles
+  const [x, y, z] = a, cx = Math.cos(x), sx = Math.sin(x), cy = Math.cos(y), sy = Math.sin(y), cz = Math.cos(z), sz = Math.sin(z);
+  const m = [cy * cz, cy * sz, -sy, sx * sy * cz - cx * sz, sx * sy * sz + cx * cz, sx * cy, cx * sy * cz + sx * sz, cx * sy * sz - sx * cz, cx * cy];
+  return new Float32Array(m);
+}
+
+// Visit a fractal object: come in from far out, skim the surface, pull away.
+class BulbScene {
+  constructor(genome) {
+    this.kind = 'bulb';
+    this.g = genome;
+    this.pal = genome.pal != null ? genome.pal : pickPalette();
+    this.t = 0;
+    this.duration = 70 + rng() * 20;
+    this.a0 = rng() * Math.PI * 2;
+    this.omega = (rng() < 0.5 ? -1 : 1) * Math.PI * 2 / (100 + rng() * 50);   // one lap in 100-150 s
+    this.e0 = (rng() - 0.5) * 0.7;
+    this.eph = rng() * 6.28;
+    this.Rfar = 2.9 + rng() * 0.5;
+    this.Rnear = genome.near + 0.1 + rng() * 0.1;
+    this.pph = rng() * 6.28;
+    this.fov = 60 * DEG;
+    const az = rng() * Math.PI * 2, el = (25 + rng() * 25) * DEG;
+    this.sun = [Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)];
+    this.palShift = genome.palShift != null ? genome.palShift : rng();
+    this.sky = makeSky();
+    this.ang = this.a0;
+    this.el = 0;
+    this.update(0);
+  }
+  title() { return this.g.name || OBJECT_KINDS[this.g.kind].name; }
+  subtitle() { return OBJECT_KINDS[this.g.kind].sub; }
+  update(dt) {
+    this.t += dt;
+    const u = Math.min(this.t / this.duration, 1);
+    const R = this.Rnear + (this.Rfar - this.Rnear) * (0.5 + 0.5 * Math.cos(2 * Math.PI * u));
+    // Close to the surface the camera slows down, so detail never streams past.
+    const slow = clamp((R - 1.05) / (this.Rfar - 1.05), 0.22, 1);
+    this.ang += this.omega * dt * slow;
+    this.el += dt * slow;
+    const a = this.ang;
+    const e = this.e0 + 0.45 * Math.sin(this.el * 0.04 + this.eph);
+    this.cam = [R * Math.cos(e) * Math.sin(a), R * Math.sin(e), R * Math.cos(e) * Math.cos(a)];
+    const s = Math.sign(this.omega);
+    const close = (this.Rfar - R) / (this.Rfar - this.Rnear);
+    const look = scl([s * Math.cos(a), 0, -s * Math.sin(a)], 0.6 * close * close);
+    this.b = basis(sub(look, this.cam), [0, 1, 0], 0, s * 4 * DEG * close);
+    // A slow, small drift keeps each object alive without jumping.
+    const g = this.g, wob = Math.sin(this.t * 0.045 + this.pph);
+    this.k = g.k.slice();
+    this.rot = g.rot.slice();
+    if (g.kind === 0) this.k[0] += 0.5 * wob;
+    if (g.kind === 3) this.k = this.k.map((v, i) => v + 0.03 * Math.sin(this.t * 0.03 * (i + 1) + this.pph));
+    if (g.kind === 4) this.rot = this.rot.map((v, i) => v + 0.05 * Math.sin(this.t * 0.02 * (i + 1) + this.pph));
+  }
+  render(tgt, w, h, time) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, tgt.fbo);
+    gl.viewport(0, 0, w, h);
+    const P = progs.bulb;
+    gl.useProgram(P.p);
+    gl.uniform2f(P.u('uRes'), w, h);
+    gl.uniform3fv(P.u('uCamPos'), this.cam);
+    gl.uniform3fv(P.u('uFwd'), this.b.f);
+    gl.uniform3fv(P.u('uRight'), this.b.right);
+    gl.uniform3fv(P.u('uUp'), this.b.up);
+    gl.uniform1f(P.u('uTanHalf'), Math.tan(this.fov / 2));
+    gl.uniform1i(P.u('uKind'), this.g.kind);
+    gl.uniform4fv(P.u('uK'), this.k);
+    gl.uniform4fv(P.u('uK2'), this.g.k2);
+    gl.uniformMatrix3fv(P.u('uRot'), false, rotMat(this.rot));
+    gl.uniform1f(P.u('uObjScale'), this.g.scale);
+    gl.uniform1f(P.u('uBound'), 1.25);
+    gl.uniform1i(P.u('uNoSky'), Q.has('nosky') ? 1 : 0);
+    bindPalette(P, this.pal);
+    gl.uniform1f(P.u('uPalShift'), this.palShift + this.t * 0.01);
+    gl.uniform3fv(P.u('uSun'), this.sun);
+    gl.uniform1f(P.u('uTime'), time);
+    gl.uniform1f(P.u('uExposure'), 1.1);
+    bindSky(P, this.sky, [this.sun[0], this.sun[2], this.sun[1]], 0, 2 * Math.tan(this.fov / 2) / h);
+    gl.uniform1i(P.u('uShadows'), QUALITY[settings.quality].shadows);
+    gl.uniform2f(P.u('uJitter'), jitter[0], jitter[1]);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  info() { return { kind: this.kind, object: this.title(), genome: this.g, cam: this.cam, duration: this.duration, pal: PALETTES[this.pal].name }; }
+  dispose() {}
+}
+
+// Next object to visit: a discovered favourite most of the time, else a fresh
+// random genome; never the same kind twice running.
+let lastObjKind = -1;
+function nextGenome() {
+  const forced = Q.has('kind') ? num(Q.get('kind'), 0) | 0 : null;
+  if (Q.has('genome')) { try { return JSON.parse(Q.get('genome')); } catch (e) { /* fall through */ } }
+  const pool = (window.DISCOVERED || []).filter(g => (forced == null ? g.kind !== lastObjKind : g.kind === forced));
+  let g;
+  if (pool.length && rng() < 0.75) g = Object.assign({}, pool[Math.floor(rng() * pool.length)]);
+  else {
+    let kind = forced;
+    if (kind == null) do { kind = Math.floor(rng() * OBJECT_KINDS.length); } while (kind === lastObjKind);
+    g = randomGenome(kind, rng);
+  }
+  lastObjKind = g.kind;
+  return g;
+}
+
+// ---------------------------------------------------------------- director
+const FADE = 7;   // seconds of cross-fade between flights
+let cur = null, nxt = null, fade = 0, intro = 0;
+const queue = [];
+let requesting = false, sceneCount = 0, lastRegion = -1;
+const recentPlanets = [];
+
+function nextKind() {
+  if (FORCE_KIND === 'bulb' || FORCE_KIND === 'obj') return 'bulb';
+  if (FORCE_KIND === 'mandel') return 'mandel';
+  sceneCount++;
+  return settings.bulb && sceneCount % 2 === 0 ? 'bulb' : 'mandel';   // planets and objects take turns
+}
+function prepareNext() {
+  if (requesting || queue.length) return;
+  if (nextKind() === 'bulb') { queue.push(new BulbScene(nextGenome())); return; }
+  requesting = true;
+  const opts = { avoid: lastRegion, region: FORCE_REGION, refCap: 8000 };
+  // Most of the time, fly to one of the planets the discovery sweep picked out.
+  const planets = (window.DISCOVERED_PLANETS || []).filter(pl => !recentPlanets.includes(pl.name) && (FORCE_REGION == null || pl.regionIndex === FORCE_REGION));
+  if (planets.length && rng() < 0.65) {
+    opts.fixed = planets[Math.floor(rng() * planets.length)];
+    recentPlanets.push(opts.fixed.name);
+    if (recentPlanets.length > Math.min(6, (window.DISCOVERED_PLANETS || []).length - 1)) recentPlanets.shift();
+  }
+  requestDestination((rng() * 4294967296) >>> 0, opts, dest => {
+    requesting = false;
+    if (dest) { lastRegion = dest.regionIndex; queue.push(new MandelScene(dest)); }
+  });
+}
+function tick(dt) {
+  prepareNext();
+  if (!cur) {
+    if (!queue.length) return;
+    cur = queue.shift(); cur.slot = 0; intro = 0;
+    if (Q.has('u0')) cur.t = num(Q.get('u0'), 0) * cur.duration;   // testing: start mid-flight
+    showLabel(cur);
+  }
+  const sdt = dt * settings.speed;
+  cur.update(sdt);
+  intro = Math.min(1, intro + dt / 2.5);
+  if (nxt) {
+    nxt.update(sdt);
+    fade += dt / FADE;
+    if (fade >= 1) { cur.dispose(); cur = nxt; nxt = null; fade = 0; }
+  } else if (cur.t >= cur.duration - FADE * 0.5 * settings.speed && queue.length) {
+    nxt = queue.shift(); nxt.slot = 1 - cur.slot; fade = 0;
+    showLabel(nxt);
+  }
+}
+
+// ---------------------------------------------------------------- label
+const label = document.getElementById('label');
+let labelTimer = 0;
+function hideLabel() { clearTimeout(labelTimer); label.classList.remove('show'); }
+function showLabel(scene) {
+  if (!settings.labels || STILL) return;
+  hideLabel();
+  document.getElementById('labelName').textContent = scene.title();
+  document.getElementById('labelSub').textContent = scene.subtitle();
+  labelTimer = setTimeout(() => {
+    label.classList.add('show');
+    labelTimer = setTimeout(() => label.classList.remove('show'), 8000);
+  }, 1800);
+}
+
+// ---------------------------------------------------------------- drawing
+function draw(time) {
+  resize();
+  frameNo++;
+  const jit = num(Q.get('jit'), JITTER);
+  jitter = TAA && !(STILL && !Q.has('seq')) ? [(halton(frameNo % 8 + 1, 2) - 0.5) * jit, (halton(frameNo % 8 + 1, 3) - 0.5) * jit] : [0, 0];
+  const rw = Math.max(1, Math.round(W * renderScale)), rh = Math.max(1, Math.round(H * renderScale));
+  for (const s of [cur, nxt]) {
+    if (!s) continue;
+    s.render(sceneTgt, rw, rh, time);
+    runTaa(s, rw, rh);
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, W, H);
+  const P = progs.comp;
+  gl.useProgram(P.p);
+  const a = cur ? sceneImage(cur) : sceneTgt.tex;
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, a);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, nxt ? sceneImage(nxt) : a);
+  gl.uniform1i(P.u('uA'), 0);
+  gl.uniform1i(P.u('uB'), 1);
+  const f = clamp(fade, 0, 1);
+  gl.uniform1f(P.u('uMix'), nxt ? f * f * (3 - 2 * f) : 0);
+  gl.uniform2f(P.u('uScale'), rw / W, rh / H);
+  gl.uniform2f(P.u('uMaxUv'), (rw - 0.5) / W, (rh - 0.5) / H);
+  gl.uniform1f(P.u('uFade'), cur ? intro : 0);
+  gl.uniform1f(P.u('uTime'), time);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+// Keep the GPU busy for at most the quality's budget of each frame by changing the
+// render scale, so a wallpaper on every monitor leaves room for everything else.
+// GPU time comes from timer queries, or from an occasional gl.finish() without them.
+const timerExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+const queries = [];
+let gpuMs = 0, lastProbe = 0;
+function noteGpu(ms) { gpuMs = gpuMs ? gpuMs * 0.8 + ms * 0.2 : ms; }
+function pollTimers() {
+  while (queries.length) {
+    const q = queries[0];
+    if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+    if (!gl.getParameter(timerExt.GPU_DISJOINT_EXT)) noteGpu(gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6);
+    gl.deleteQuery(q);
+    queries.shift();
+  }
+}
+function timedDraw(now) {
+  let q = null;
+  if (timerExt && queries.length < 6) { q = gl.createQuery(); gl.beginQuery(timerExt.TIME_ELAPSED_EXT, q); }
+  const probe = !timerExt && now - lastProbe > 600;
+  const t0 = performance.now();
+  draw(now / 1000);
+  if (q) { gl.endQuery(timerExt.TIME_ELAPSED_EXT); queries.push(q); }
+  if (probe) { gl.finish(); noteGpu(performance.now() - t0); lastProbe = now; }
+}
+// Resolution drifts toward whatever fits the GPU budget, a few percent per second,
+// so sharpness never jumps (a sudden step reads as a flash). It only moves faster
+// when far over budget, to avoid dropped frames.
+function adapt(dt) {
+  if (!gpuMs || !dt) return;
+  const budget = 1000 / settings.fps * QUALITY[settings.quality].budget;
+  const want = clamp(renderScale * Math.sqrt(budget / gpuMs), 0.35, QUALITY[settings.quality].maxScale);
+  const over = gpuMs / budget;
+  const rate = want < renderScale ? 0.03 + 0.12 * clamp(over - 1.5, 0, 2) : 0.02;
+  renderScale += clamp(want - renderScale, -rate * dt, rate * dt);
+}
+
+// ---------------------------------------------------------------- run
+// ?discover=N&kind=K&dseed=S: render N random genomes of one kind from a standard
+// viewpoint on black, resize each to radius 1.1 from its measured extent, score
+// how much detail it has, and leave the results in window.__disc.
+function discover() {
+  const n = num(Q.get('discover'), 20) | 0, kind = num(Q.get('kind'), 0) | 0;
+  const r = finder.mulberry32(num(Q.get('dseed'), 1) | 0);
+  renderScale = 1;
+  let px = null;
+  const shoot = g => {
+    cur = new BulbScene(g);
+    cur.slot = 0; intro = 1;
+    cur.ang = 0.7; cur.el = 0; cur.e0 = 0.3; cur.eph = 0; cur.Rfar = 3.0; cur.omega = 0; cur.update(0);
+    cur.prev = null;
+    draw(0);
+    if (!px || px.length < W * H * 4) px = new Uint8Array(W * H * 4);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let cnt = 0, rmax = 0, grad = 0, sl = 0, sl2 = 0, sc = 0;
+    const lum = i => px[i] * 0.3 + px[i + 1] * 0.55 + px[i + 2] * 0.15;
+    for (let y = 1; y < H - 1; y++) {
+      for (let x = 1; x < W - 1; x++) {
+        const i = 4 * (y * W + x), L = lum(i);
+        if (L < 6) continue;
+        cnt++;
+        rmax = Math.max(rmax, Math.hypot(x - W / 2, y - H / 2));
+        grad += Math.abs(L - lum(i + 4)) + Math.abs(L - lum(i + 4 * W));
+        sl += L; sl2 += L * L;
+        sc += Math.max(px[i], px[i + 1], px[i + 2]) - Math.min(px[i], px[i + 1], px[i + 2]);
+      }
+    }
+    const cov = cnt / (W * H);
+    return { cov, rmax, detail: cnt ? grad / cnt : 0, contrast: cnt ? Math.sqrt(Math.max(sl2 / cnt - (sl / cnt) ** 2, 0)) : 0, chroma: cnt ? sc / cnt : 0 };
+  };
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const g = randomGenome(kind, r);
+    g.pal = Math.floor(r() * PALETTES.length);
+    g.palShift = r();
+    let st = shoot(g);
+    for (let tries = 0; tries < 3 && st.cov < 0.002; tries++) { g.scale /= 3; st = shoot(g); }
+    for (let fit = 0; fit < 2 && st.cov >= 0.002; fit++) {
+      // world radius of what we saw, from its angular radius at distance 3
+      const ang = Math.atan(st.rmax / (H / 2) * Math.tan(30 * DEG));
+      g.scale *= 3.0 * Math.sin(ang) / 1.1;
+      st = shoot(g);
+    }
+    out.push({ g, st, img: canvas.toDataURL('image/jpeg', 0.85) });
+  }
+  window.__disc = out;
+}
+
+if (STILL && Q.has('discover')) {
+  try { discover(); document.title = 'done'; } catch (e) { fail(e.stack || e.message); }
+  return;
+}
+if (STILL) {
+  // Render one frame at a chosen moment, for screenshots and tests.
+  try {
+    if (FORCE_KIND === 'bulb' || FORCE_KIND === 'obj') cur = new BulbScene(nextGenome());
+    else {
+      const fixed = Q.has('dest') ? JSON.parse(Q.get('dest')) : null;
+      const dest = finder.findDestination((rng() * 4294967296) >>> 0, { region: FORCE_REGION, refCap: 8000, fixed });
+      if (!dest) throw new Error('No destination found');
+      cur = new MandelScene(dest);
+    }
+    cur.slot = 0; intro = 1;
+    const t = Q.has('u') ? num(Q.get('u'), 0.5) * cur.duration : num(Q.get('t'), 20);
+    cur.update(t);
+    draw(t);
+    gl.finish();
+    // ?seq=N: render N more frames at 30 fps and keep them, to measure flicker.
+    const seq = num(Q.get('seq'), 0) | 0;
+    if (seq > 0) {
+      window.__frames = [];
+      for (let k = 1; k <= seq; k++) {
+        cur.update(settings.speed / settings.fps);
+        draw(t + k / settings.fps);
+        window.__frames.push(canvas.toDataURL('image/jpeg', 0.95));
+      }
+    }
+    const info = cur.info();
+    const bench = num(Q.get('bench'), 0) | 0;
+    if (bench > 0) {
+      const t0 = performance.now();
+      for (let k = 0; k < bench; k++) draw(t);
+      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(4));
+      info.ms = +((performance.now() - t0) / bench).toFixed(2);
+    }
+    document.getElementById('info').textContent = JSON.stringify(info);
+    document.title = 'done';
+  } catch (e) { fail(e.stack || e.message); }
+  return;
+}
+
+let lastRender = 0, frames = 0, fpsT = 0, fpsNow = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (timerExt) pollTimers();
+  if (now - lastRender < 1000 / settings.fps - 2) return;
+  const dt = lastRender ? Math.min((now - lastRender) / 1000, 0.1) : 0;
+  lastRender = now;
+  tick(dt);
+  timedDraw(now);
+  adapt(dt);
+  frames++;
+  if (now - fpsT > 1000) { fpsNow = frames * 1000 / (now - fpsT); frames = 0; fpsT = now; }
+}
+// For testing from the console: window.fractalFlight.stats
+window.fractalFlight = {
+  get stats() {
+    return { fps: fpsNow, gpuMs, renderScale, W, H, worker: !!worker, queue: queue.length, fade,
+             cur: cur && Object.assign({ t: cur.t }, cur.info()), next: nxt && nxt.info() };
+  },
+  skip() { if (cur) cur.t = Math.max(cur.t, cur.duration - FADE * settings.speed); },
+};
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

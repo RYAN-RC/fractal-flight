@@ -1,0 +1,14 @@
+{
+  "AppVersion": "1.0.0.0",
+  "Title": "Fractal Flight",
+  "Thumbnail": "thumbnail.jpg",
+  "Preview": null,
+  "Desc": "A tour of fractal worlds: fly down into Mandelbrot planets from space, and past 3D fractals (Mandelbulb, Mandelbox, Menger sponge, Julia sets, kaleidoscopic crystals, Apollonian foam) under a sky of galaxies and gas giants.",
+  "Author": "Ryan",
+  "License": null,
+  "Contact": null,
+  "Type": 1,
+  "FileName": "index.html",
+  "Arguments": null,
+  "IsAbsolutePath": false
+}
