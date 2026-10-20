@@ -14,8 +14,9 @@ browser with WebGL 2; it is GPU-heavy).
 
 > **Photosensitivity note.** This is constantly moving imagery with fine detail. It has
 > been tuned to avoid flashing and strobing (no sub-pixel jitter, 60 fps, gradual
-> resolution changes, slow camera), but if moving patterns bother you, try it in a
-> window first, lower the flight speed, or use the planets-only setting.
+> resolution changes, slow camera, calm palettes that never cycle), but if moving
+> patterns bother you, try it in a window first, lower the flight speed or the colour
+> intensity, or use the planets-only setting.
 
 ## Screenshots
 
@@ -25,12 +26,12 @@ browser with WebGL 2; it is GPU-heavy).
 | Arriving at a planet: the Mandelbrot set is the continent | Coming down, the horizon still curved |
 | ![Flying over the fractal landscape](screenshots/04-landscape.jpg) | ![Deep in the dive](screenshots/05-deep-dive.jpg) |
 | The landscape: plateaus, glowing canyons, mirror lakes | Deep in a dive, hundreds of millions of times closer |
-| ![Golden Reliquary, a kaleidoscopic IFS](screenshots/10-golden-reliquary.jpg) | ![Frost Foam, Apollonian foam](screenshots/13-frost-foam.jpg) |
-| Golden Reliquary (kaleidoscopic IFS) | Frost Foam (Apollonian foam) |
-| ![Violet Shell, a quaternion Julia set](screenshots/14-violet-shell.jpg) | ![Fire Sponge, a Menger sponge](screenshots/15-fire-sponge.jpg) |
-| Violet Shell (quaternion Julia set) | Fire Sponge (Menger sponge) |
-| ![Temple, a kaleidoscopic IFS](screenshots/16-temple.jpg) | ![Prism Bulb, a Mandelbulb](screenshots/17-prism-bulb.jpg) |
-| Temple (kaleidoscopic IFS) | Prism Bulb (Mandelbulb) |
+| ![Aurora Reliquary, a kaleidoscopic IFS](screenshots/10-aurora-reliquary.jpg) | ![Sandstone Foam, Apollonian foam](screenshots/13-sandstone-foam.jpg) |
+| Aurora Reliquary (kaleidoscopic IFS) | Sandstone Foam (Apollonian foam) |
+| ![Tidal Shell, a quaternion Julia set](screenshots/14-tidal-shell.jpg) | ![Ember Sponge, a Menger sponge](screenshots/15-ember-sponge.jpg) |
+| Tidal Shell (quaternion Julia set) | Ember Sponge (Menger sponge) |
+| ![Temple, a kaleidoscopic IFS](screenshots/16-temple.jpg) | ![Tidal Bulb, a Mandelbulb](screenshots/17-tidal-bulb.jpg) |
+| Temple (kaleidoscopic IFS) | Tidal Bulb (Mandelbulb) |
 
 All 46 discovered favourites, 10 planets and 36 objects:
 
@@ -43,8 +44,9 @@ All 46 discovered favourites, 10 planets and 36 objects:
 2. Download this repository (Code > Download ZIP) and unzip it.
 3. Drag the folder (or the zip) into Lively and set it on each screen.
 
-Lively's customise panel has flight speed, quality, frame rate (30 or 60 fps), whether
-to visit 3D objects between planets, and whether to show each place's name. Each screen
+Lively's customise panel has flight speed, quality, frame rate (30 or 60 fps), colour
+intensity (from near-grey to rich), whether to visit 3D objects between planets, and
+whether to show each place's name. Each screen
 runs its own flight.
 
 It also runs as a plain web page: open `index.html` in a browser. Other wallpaper
@@ -62,6 +64,9 @@ engines that show web pages should work too.
 - **3D fractal objects** floating in space: Mandelbulb, Mandelbox, Menger sponge,
   quaternion Julia set, kaleidoscopic IFS crystals and Apollonian foam. The camera comes
   in, skims the surface (slowing right down close up) and pulls away.
+- **Colour** comes from eight harmonious palettes (Dusk, Ocean, Ember, Forest, Glacier,
+  Rose, Desert, Aurora) with wide bands and no colour cycling; one setting scales the
+  saturation of everything.
 - **The sky** is generated for every flight: stars, a Milky Way band with dust lanes,
   nebulae in the scene's colours, spiral galaxies, one or two gas giants with storms
   and rings, and moons.
@@ -110,6 +115,7 @@ unusual):
 | `tools/gallery.py OUT.jpg` | Every favourite in `discovered.js` as one named gallery |
 | `tools/render.py OUT "name\|query" ...` | Still frames at 1920x1080 |
 | `tools/flicker.py OUT "name\|query" ...` | Blinking, flicker and per-frame motion, with heatmaps |
+| `tools/colorfulness.py OUT "name\|query" ...` | Colourfulness, hue count and colour flicker per scene |
 
 Add a pick to `discovered.js` with a `"name"` and the tour will visit it.
 
@@ -117,7 +123,7 @@ Add a pick to `discovered.js` with a `"name"` and the tour will visit it.
 
 `?still=1&u=0.5` renders one frame halfway through a flight. `&scene=obj` or
 `&scene=mandel` forces one kind, `&kind=0..5` a kind of object, `&region=0..10` a region,
-`&pal=0..7` a palette, `&seed=N` the random seed, `&dest=<json>` or `&genome=<json>` one
+`&pal=0..7` a palette, `&color=0..1.3` the colour intensity, `&seed=N` the random seed, `&dest=<json>` or `&genome=<json>` one
 specific planet or object. Live: `&speed=2`, `&quality=0..2`, `&fps=30`, `&labels=0`,
 `&taa=0`. In the console, `fractalFlight.stats` shows fps, GPU time and render scale and
 `fractalFlight.skip()` jumps to the next flight.

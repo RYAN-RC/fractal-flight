@@ -44,6 +44,7 @@ const settings = {
   fps: num(Q.get('fps'), 60),
   bulb: Q.get('bulb') !== '0',
   labels: Q.get('labels') !== '0',
+  color: num(Q.get('color'), 1.0),      // saturation, 0 = grey
 };
 // budget = share of each frame the GPU may spend on the wallpaper.
 // At 60 fps on two screens, Medium lands near 40% of the GPU in total.
@@ -68,30 +69,33 @@ window.livelyPropertyListener = function (name, val) {
     case 'fps': settings.fps = (+val === 0) ? 30 : 60; break;
     case 'bulb': settings.bulb = !!val; break;
     case 'labels': settings.labels = !!val; if (!val) hideLabel(); break;
+    case 'color': settings.color = Math.max(0, +val); break;
   }
 };
 
 // ---------------------------------------------------------------- palettes
-// Colour stops wrap around (first == last). Sky colours light each scene.
+// Colour stops wrap around (first == last). Sky colours light each scene. Kept to
+// neighbouring hues with gentle steps: the neon set read as flashy.
 const PALETTES = [
-  { name: 'Nebula', stops: ['#0b0033', '#3a0ca3', '#7209b7', '#f72585', '#ff8500', '#ffd60a', '#4cc9f0', '#0b0033'],
-    zenith: '#05001a', horizon: '#c43a8c', sun: '#ffd29a', glow: '#ff5ec4' },
-  { name: 'Electric', stops: ['#020024', '#1e3cff', '#00d4ff', '#00ffa3', '#fff200', '#ff6a00', '#ff006e', '#8000ff', '#020024'],
-    zenith: '#000416', horizon: '#2a5cff', sun: '#cfeeff', glow: '#00e5ff' },
-  { name: 'Sunset', stops: ['#140021', '#5a0a8c', '#c2185b', '#ff5722', '#ffc107', '#fff4d6', '#ff9800', '#b71c1c', '#140021'],
-    zenith: '#10001c', horizon: '#ff6a3c', sun: '#ffe2a8', glow: '#ffae42' },
-  { name: 'Aurora', stops: ['#000814', '#003566', '#00b4d8', '#48ff8a', '#d6ff4a', '#00f5d4', '#9b5de5', '#f15bb5', '#000814'],
-    zenith: '#00040f', horizon: '#169c86', sun: '#d8fff0', glow: '#5effc1' },
-  { name: 'Candy', stops: ['#2b0040', '#ff0080', '#ff8c00', '#ffe600', '#00e676', '#00b0ff', '#7c4dff', '#2b0040'],
-    zenith: '#0b0220', horizon: '#e044c4', sun: '#fff1c2', glow: '#ff6bd6' },
-  { name: 'Lava and Ice', stops: ['#0b0420', '#ff2a6d', '#ff9a00', '#fff3b0', '#05d9e8', '#005678', '#0b0420'],
-    zenith: '#030014', horizon: '#c8326a', sun: '#ffe9c4', glow: '#05d9e8' },
-  { name: 'Classic', stops: ['#000764', '#206bcb', '#edffff', '#ffaa00', '#3a0a00', '#000764'],
-    zenith: '#000214', horizon: '#3570d0', sun: '#fff3d0', glow: '#9fd9ff' },
-  { name: 'Emerald', stops: ['#001a14', '#00704a', '#00e5a0', '#e8ff9c', '#ffd000', '#ff7b00', '#5c1a00', '#001a14'],
-    zenith: '#000d0a', horizon: '#1f9e6e', sun: '#fff6cc', glow: '#7dffb0' },
+  { name: 'Dusk', stops: ['#141a3a', '#2e3a6e', '#5b5f9c', '#9b8fc4', '#e0b8c8', '#f2d6b8', '#7a5c8a', '#141a3a'],
+    zenith: '#070a1a', horizon: '#6a5a8c', sun: '#ffe2c4', glow: '#b8a6d8' },
+  { name: 'Ocean', stops: ['#071a2b', '#0e3b55', '#1f6f7f', '#4fa3a0', '#a6d4c4', '#e8e2c8', '#2a5d78', '#071a2b'],
+    zenith: '#03101a', horizon: '#2f6f86', sun: '#e8f2f0', glow: '#7cc4c0' },
+  { name: 'Ember', stops: ['#1c0d08', '#4a1f10', '#8a3b1c', '#c46a2c', '#e8a95a', '#f5ddb0', '#7a3a1e', '#1c0d08'],
+    zenith: '#100604', horizon: '#9a5a34', sun: '#ffe0b8', glow: '#e8a060' },
+  { name: 'Forest', stops: ['#0b1a12', '#1e3b28', '#3f6b45', '#7a9e62', '#c2c98a', '#efe3b4', '#4c6b3c', '#0b1a12'],
+    zenith: '#050e08', horizon: '#4f7a56', sun: '#f4ecc8', glow: '#a8c890' },
+  { name: 'Glacier', stops: ['#0a1424', '#1c3352', '#3d6189', '#7fa3c4', '#c4dae8', '#f2f6f8', '#4c6f94', '#0a1424'],
+    zenith: '#050a14', horizon: '#4a73a0', sun: '#eef4ff', glow: '#a8c8e8' },
+  { name: 'Rose', stops: ['#1e0f1e', '#45233f', '#7a4466', '#b07490', '#deaab4', '#f4dcd2', '#8a5070', '#1e0f1e'],
+    zenith: '#0e060e', horizon: '#8a5a78', sun: '#ffe6dc', glow: '#d8a4b8' },
+  { name: 'Desert', stops: ['#1f140c', '#4d3220', '#86583a', '#bb8a5e', '#e2bf8e', '#f6e6c6', '#9a6a46', '#1f140c'],
+    zenith: '#0e0a06', horizon: '#a07850', sun: '#fff0d4', glow: '#e0b880' },
+  { name: 'Aurora', stops: ['#06171c', '#0f3a40', '#2a6e62', '#5fa58a', '#a8d4b0', '#cfc6e6', '#5a6e9a', '#06171c'],
+    zenith: '#030c10', horizon: '#2f7a70', sun: '#e6fff4', glow: '#8ad4b8' },
 ];
 
+const PAL_CHROMA = 1.45;   // the stops are drawn soft; this sets how rich they come out
 const s2l = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
 const l2s = c => c <= 0.0031308 ? c * 12.92 : 1.055 * Math.pow(c, 1 / 2.4) - 0.055;
 function hexLin(h) { const n = parseInt(h.slice(1), 16); return [s2l((n >> 16 & 255) / 255), s2l((n >> 8 & 255) / 255), s2l((n & 255) / 255)]; }
@@ -171,6 +175,7 @@ uniform vec4 uPlanet[2];     // gas giants: xyz = direction, w = angular radius 
 uniform vec3 uPlanetAxis[2];
 uniform vec4 uPlanetB[2];    //   x = band frequency, y = palette offset, z = rings (0/1), w = storm angle
 uniform vec4 uMoon[2];       // moons: xyz = direction, w = angular radius (0 = none)
+uniform float uSat;          // overall saturation (the Color intensity setting)
 
 float hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -207,6 +212,11 @@ vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
 vec3 palC(float x) { return texture(uPal, vec2(x, uPalRow)).rgb; }
+vec3 finish(vec3 c, float exposure) {
+  c = aces(c * exposure);
+  c = mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, uSat);
+  return pow(max(c, 0.0), vec3(1.0 / 2.2));
+}
 
 vec3 starTint(float t) {
   if (t < 0.3) return mix(vec3(0.62, 0.72, 1.0), vec3(0.95, 0.96, 1.0), t / 0.3);
@@ -553,7 +563,7 @@ void main() {
       col = base * (uSunCol * dif * 0.75 + mix(uHorizon, uZenith, 0.3) * skyl * 0.8 + 0.1 * skyl) + uSunCol * spe * 0.25;
       col *= mix(0.25, 1.0, s);                    // canyon floors sit in shadow
       float glow = exp(-dpx * 0.5);                // the filaments glow
-      col += uGlow * glow * (1.0 - 0.7 * s) * 0.3;
+      col += uGlow * glow * (1.0 - 0.7 * s) * 0.15;
     } else {
       // Inside the set: a dark glossy lake that mirrors the sky.
       vec3 R = reflect(rd, Ns);
@@ -576,8 +586,7 @@ void main() {
     float dy = (dot(P2, uUp) / dot(P2, uFwd) - dot(P, uUp) / dot(P, uFwd)) * focal;
     rise = max(clamp(dy / float(uMaxD), 0.0, 1.0), 1.5 / 255.0);   // 0 is kept for sky
   }
-  col = aces(col * uExposure);
-  outColor = vec4(pow(col, vec3(1.0 / 2.2)), rise);
+  outColor = vec4(finish(col, uExposure), rise);
 }`;
 
 // Pass 2: voxel-space relief. Each pixel looks down its column for the nearest
@@ -827,21 +836,20 @@ void main() {
       vec3 n = calcNormal(pos, max(px * t * 0.5, 1e-5));
       float occ = calcAO(pos, n);
       float sha = uShadows == 1 ? softShadow(pos + n * 0.003, uSun) : 1.0;
-      float ci = uPalShift + sqrt(trap.w) * 1.15 + trap.y * 0.55 + trap.x * 0.25;
+      float ci = uPalShift + sqrt(trap.w) * 0.75 + trap.y * 0.3 + trap.x * 0.15;   // two or three hues per object, not a rainbow
       vec3 base = texture(uPal, vec2(ci, uPalRow)).rgb;
       float dif = clamp(dot(n, uSun), 0.0, 1.0) * sha;
       float skyl = 0.5 + 0.5 * n.y;
       float fre = pow(clamp(1.0 + dot(n, rd), 0.0, 1.0), 3.0);
       float spe = pow(clamp(dot(n, normalize(uSun - rd)), 0.0, 1.0), 40.0) * dif;
       vec3 lin = uSunCol * dif * 2.0 + mix(uHorizon, uZenith, 0.4) * skyl * 1.1 * occ
-               + uGlow * fre * 1.3 * occ + vec3(0.06) * occ;
+               + uGlow * fre * 0.6 * occ + vec3(0.06) * occ;
       col = base * lin + uSunCol * spe * 0.6;
     } else {
-      if (uNoSky == 0) col += uGlow * glow * 0.006;
+      if (uNoSky == 0) col += uGlow * glow * 0.003;
     }
   }
-  col = aces(col * uExposure);
-  outColor = vec4(pow(col, vec3(1.0 / 2.2)), depth);
+  outColor = vec4(finish(col, uExposure), depth);
 }`;
 
 // Temporal anti-aliasing. Finds where this pixel's surface point was on screen
@@ -979,7 +987,7 @@ const palTex = gl.createTexture();
 (function buildPalettes() {
   const W = 256, data = new Uint8Array(W * PALETTES.length * 4);
   PALETTES.forEach((p, row) => {
-    const labs = p.stops.map(h => linToOklab(hexLin(h)));
+    const labs = p.stops.map(h => linToOklab(hexLin(h))).map(([L, a, b]) => [L, a * PAL_CHROMA, b * PAL_CHROMA]);
     for (let i = 0; i < W; i++) {
       const x = i / W * (labs.length - 1), k = Math.floor(x), f = x - k;
       const a = labs[k], b = labs[k + 1];
@@ -1197,6 +1205,7 @@ function makeSky() {
   };
 }
 function bindSky(P, sky, sunSky, atmo, pxAng) {
+  gl.uniform1f(P.u('uSat'), settings.color);
   gl.uniform3fv(P.u('uSunSky'), sunSky);
   gl.uniform1f(P.u('uPxAng'), pxAng);
   gl.uniform1f(P.u('uAtmo'), atmo);
@@ -1235,7 +1244,7 @@ class MandelScene {
     this.sun = [Math.cos(el) * Math.cos(az), Math.cos(el) * Math.sin(az), Math.sin(el)];
     this.fogK = 0.014 + rng() * 0.012;
     this.hMax = 0.09 + rng() * 0.05;   // plateau height, in altitudes
-    this.palDensity = 0.09 + rng() * 0.06;
+    this.palDensity = 0.05 + rng() * 0.03;   // wide bands: fewer hue changes as you fly
     this.palShift = rng();
     this.refTex = uploadRef(dest.ref, dest.refLen);
     this.sky = makeSky();
@@ -1308,12 +1317,12 @@ class MandelScene {
     gl.uniform1i(P.u('uMaxIter'), this.maxIter());
     bindPalette(P, this.pal);
     gl.uniform1f(P.u('uPalDensity'), this.palDensity);
-    gl.uniform1f(P.u('uPalShift'), this.palShift + this.t * 0.005);
+    gl.uniform1f(P.u('uPalShift'), this.palShift);
     gl.uniform1f(P.u('uPalExp'), 0.5);
     gl.uniform3fv(P.u('uSun'), this.sun);
     gl.uniform1f(P.u('uFogK'), this.fogK);
     gl.uniform1f(P.u('uTime'), time);
-    gl.uniform1f(P.u('uExposure'), 1.15);
+    gl.uniform1f(P.u('uExposure'), 1.05);
     bindSky(P, this.sky, this.sun, this.atmo, 2 * Math.tan(this.fov / 2) / h);
     gl.uniform3fv(P.u('uQ'), this.q);
     gl.uniform1f(P.u('uCc'), this.Cc);
@@ -1457,7 +1466,7 @@ class BulbScene {
     gl.uniform1f(P.u('uBound'), 1.25);
     gl.uniform1i(P.u('uNoSky'), Q.has('nosky') ? 1 : 0);
     bindPalette(P, this.pal);
-    gl.uniform1f(P.u('uPalShift'), this.palShift + this.t * 0.01);
+    gl.uniform1f(P.u('uPalShift'), this.palShift);
     gl.uniform3fv(P.u('uSun'), this.sun);
     gl.uniform1f(P.u('uTime'), time);
     gl.uniform1f(P.u('uExposure'), 1.1);

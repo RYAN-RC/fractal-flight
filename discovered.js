@@ -25,7 +25,7 @@ window.DISCOVERED = [
   "near": 1.4,
   "pal": 6,
   "palShift": 0.6425055079162121,
-  "name": "Amber Twist",
+  "name": "Sandstone Twist",
   "id": "k0_059"
  },
  {
@@ -51,7 +51,7 @@ window.DISCOVERED = [
   "near": 1.4,
   "pal": 6,
   "palShift": 0.8966335135046393,
-  "name": "Blue Gnarl",
+  "name": "Sandstone Gnarl",
   "id": "k0_013"
  },
  {
@@ -103,7 +103,7 @@ window.DISCOVERED = [
   "near": 1.4,
   "pal": 1,
   "palShift": 0.028589559020474553,
-  "name": "Prism Bulb",
+  "name": "Tidal Bulb",
   "id": "k0_006"
  },
  {
@@ -155,7 +155,7 @@ window.DISCOVERED = [
   "near": 1.4,
   "pal": 2,
   "palShift": 0.6728534877765924,
-  "name": "Crimson Bulb",
+  "name": "Copper Bulb",
   "id": "k0_012"
  },
  {
@@ -181,7 +181,7 @@ window.DISCOVERED = [
   "near": 1.4,
   "pal": 4,
   "palShift": 0.8632576938252896,
-  "name": "Marigold",
+  "name": "Glacier Bloom",
   "id": "k0_044"
  },
  {
@@ -233,7 +233,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 7,
   "palShift": 0.5616679138038307,
-  "name": "Ember Box",
+  "name": "Aurora Box",
   "id": "k1_031"
  },
  {
@@ -311,7 +311,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 0,
   "palShift": 0.45815764321014285,
-  "name": "Neon Box",
+  "name": "Twilight Box",
   "id": "k1_016"
  },
  {
@@ -337,7 +337,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 7,
   "palShift": 0.153360866708681,
-  "name": "Jade Sponge",
+  "name": "Aurora Sponge",
   "id": "k2_002"
  },
  {
@@ -363,7 +363,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 0,
   "palShift": 0.9177511956077069,
-  "name": "Carnival Sponge",
+  "name": "Twilight Sponge",
   "id": "k2_024"
  },
  {
@@ -389,7 +389,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 2,
   "palShift": 0.9276688699610531,
-  "name": "Fire Sponge",
+  "name": "Ember Sponge",
   "id": "k2_014"
  },
  {
@@ -441,7 +441,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 4,
   "palShift": 0.41054819035343826,
-  "name": "Candy Sponge",
+  "name": "Glacier Sponge",
   "id": "k2_058"
  },
  {
@@ -467,7 +467,7 @@ window.DISCOVERED = [
   "near": 1.5,
   "pal": 1,
   "palShift": 0.6012605235446244,
-  "name": "Violet Shell",
+  "name": "Tidal Shell",
   "id": "k3_052"
  },
  {
@@ -493,7 +493,7 @@ window.DISCOVERED = [
   "near": 1.5,
   "pal": 2,
   "palShift": 0.5256119752302766,
-  "name": "Copper Shell",
+  "name": "Ember Shell",
   "id": "k3_046"
  },
  {
@@ -519,7 +519,7 @@ window.DISCOVERED = [
   "near": 1.5,
   "pal": 6,
   "palShift": 0.824952733470127,
-  "name": "Glacier Shell",
+  "name": "Sandstone Shell",
   "id": "k3_016"
  },
  {
@@ -571,7 +571,7 @@ window.DISCOVERED = [
   "near": 1.5,
   "pal": 2,
   "palShift": 0.5780805030371994,
-  "name": "Sunset Shell",
+  "name": "Copper Shell",
   "id": "k3_005"
  },
  {
@@ -597,7 +597,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 1,
   "palShift": 0.2018496273085475,
-  "name": "Jade Cage",
+  "name": "Tidal Cage",
   "id": "k4_015"
  },
  {
@@ -623,7 +623,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 3,
   "palShift": 0.8437551984097809,
-  "name": "Sea Glass Cage",
+  "name": "Moss Cage",
   "id": "k4_025"
  },
  {
@@ -649,7 +649,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 7,
   "palShift": 0.8929744618944824,
-  "name": "Golden Reliquary",
+  "name": "Aurora Reliquary",
   "id": "k4_048"
  },
  {
@@ -753,7 +753,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 2,
   "palShift": 0.1564893489703536,
-  "name": "Amber Lattice",
+  "name": "Ember Lattice",
   "id": "k4_051"
  },
  {
@@ -779,7 +779,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 6,
   "palShift": 0.7278722210321575,
-  "name": "Porcelain Egg",
+  "name": "Sandstone Egg",
   "id": "k4_041"
  },
  {
@@ -805,7 +805,7 @@ window.DISCOVERED = [
   "near": 1.45,
   "pal": 6,
   "palShift": 0.4241330735385418,
-  "name": "Cobalt Crystal",
+  "name": "Sandstone Crystal",
   "id": "k4_003"
  },
  {
@@ -857,7 +857,7 @@ window.DISCOVERED = [
   "near": 1.35,
   "pal": 0,
   "palShift": 0.9113727814983577,
-  "name": "Carnival Foam",
+  "name": "Twilight Foam",
   "id": "k5_059"
  },
  {
@@ -883,7 +883,7 @@ window.DISCOVERED = [
   "near": 1.35,
   "pal": 6,
   "palShift": 0.33034603390842676,
-  "name": "Frost Foam",
+  "name": "Sandstone Foam",
   "id": "k5_057"
  },
  {
@@ -909,7 +909,7 @@ window.DISCOVERED = [
   "near": 1.35,
   "pal": 5,
   "palShift": 0.5015316954813898,
-  "name": "Saffron Foam",
+  "name": "Rose Foam",
   "id": "k5_014"
  },
  {
